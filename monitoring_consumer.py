@@ -109,9 +109,9 @@ class MonitoringConsumer:
             if not isinstance(event, dict):
                 raise ValueError("JSON-Objekt erwartet")
 
-            event_id = event["event_id"]
-            sensor_type = event["sensor_type"]
-            status = event["status"]
+            event_id = event["consumer"]
+            sensor_type = event["type"]
+            status = event["event"]
             alarm_count = event["alarm_count"]
             processing_ms = event["processing_ms"]
 

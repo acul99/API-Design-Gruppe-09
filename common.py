@@ -124,7 +124,12 @@ def declare_topology(ch):
     ch.queue_declare(
         QUEUE_MONITORING,
         durable=True,
-        arguments={"x-message-ttl": MESSAGE_TTL_MS, "x-max-length": 50_000},
+        arguments={
+            "x-queue-type": "quorum",
+            "x-message-ttl": 60000,
+            "x-dead-letter-exchange": "iot.dlx",
+            "x-dead-letter-routing-key": "dead.letter",
+        },
     )
     ch.queue_bind(QUEUE_MONITORING, MONITOR_EXCHANGE, "monitor.#")
 
