@@ -52,6 +52,21 @@ class SensorProducer:
 
         self.channel = self.connection.channel()
 
+        #DLX und DLQ erstellen
+        self.channel.exchange_declare(
+            exchange="dlx",
+            exchange_type='direct',
+            durable=True
+            )
+
+        self.channel.queue_declare(queue="dlq", durable=True)
+        self.channel.queue_bind(
+            exchange="dlx",
+            queue="dlq",
+            routing_key="dead.letter",
+        )
+
+
         self.channel.exchange_declare(
             exchange=EXCHANGE,
             exchange_type='topic',
@@ -64,7 +79,12 @@ class SensorProducer:
             self.channel.queue_declare(
                 queue=f"sensor.{queue_name}.{SENSORS[queue_name][3]}",
                 durable=True,
-                arguments={"x-queue-type": "quorum"}
+                arguments={
+                    "x-queue-type": "quorum",
+                    "x-message-ttl": 60000,  # TTL 60 Sekunden
+                    "x-dead-letter-exchange": "dlx", #dlx
+                    "x-dead-letter-routing-key": "dead.letter", #dl Key
+                }
             )
 
             self.channel.queue_bind(
@@ -75,7 +95,7 @@ class SensorProducer:
 
         self.channel.confirm_delivery()
 
-        print("Connected to RabbitMQ")
+        print("Connection Established")
 
     def publish(self, message):
         routing_key = f"sensor.{message['sensor_type']}.{message['sensor_id']}"
@@ -90,7 +110,6 @@ class SensorProducer:
 
         #Maximale X Wiederholungen bei Übertragungsfehlern, exponentiell steigende Wartezeit zwischen den Wiederholungen, max. 10 Sekunden
         for attempt in range(MAX_RETRIES + 1):
-
             try:
                 if (self.connection is None
                         or self.connection.is_closed
@@ -105,6 +124,7 @@ class SensorProducer:
                     body=body,
                     properties=properties,
                     mandatory=True,
+
                 )
                 print(f"Gesendet: {routing_key} -> {message['value']}")
 
