@@ -52,6 +52,22 @@ class SensorProducer:
 
         self.channel = self.connection.channel()
 
+        #DLX und DLQ erstellen
+        self.channel.exchange_declare(
+            exchange="dlx",
+            exchange_type='direct',
+            durable=True
+            )
+
+        self.channel.queue_declare(queue="dlq", durable=True)
+        self.channel.queue_bind(
+            exchange="dlx",
+            queue="dlq",
+            routing_key="dead.letter",
+        )
+
+
+
         self.channel.exchange_declare(
             exchange=EXCHANGE,
             exchange_type='topic',
@@ -64,7 +80,11 @@ class SensorProducer:
             self.channel.queue_declare(
                 queue=f"sensor.{queue_name}.{SENSORS[queue_name][3]}",
                 durable=True,
-                arguments={"x-queue-type": "quorum"}
+                arguments={
+                    "x-queue-type": "quorum",
+                    "x-dead-letter-exchange": "dlx",
+                    "x-dead-letter-routing-key": "dead.letter",
+                }
             )
 
             self.channel.queue_bind(
