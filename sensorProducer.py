@@ -59,7 +59,7 @@ class SensorProducer:
             durable=True
             )
 
-        self.channel.queue_declare(queue="iot.dlq", durable=True)
+        self.channel.queue_declare(queue="iot.dlq", durable=True, )
         self.channel.queue_bind(
             exchange="iot.dlx",
             queue="iot.dlq",
