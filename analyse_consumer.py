@@ -205,6 +205,7 @@ def handle(ch, method, body, profile, window, name):
     except InvalidMessage as exc:
         log.error("Ungueltige Nachricht, NACK ohne Requeue -> DLQ: %s", exc)
         ch.basic_nack(tag, requeue=False)
+        print("NACK")
         emit(ch, "failed", consumer=name, reason="invalid", detail=str(exc))
         return
     except pika.exceptions.AMQPConnectionError:
@@ -221,6 +222,7 @@ def handle(ch, method, body, profile, window, name):
         return
 
     ch.basic_ack(tag)
+    print("ACK")
     emit(
         ch,
         "processed",
@@ -255,7 +257,7 @@ def consume(profile, name):
     log.info("[%s] warte auf Nachrichten in %s", name, profile["queue"])
     try:
         # inactivity_timeout sorgt dafuer, dass das Fenster auch ohne Traffic abgeschlossen wird
-        for method, _props, body in ch.consume(profile["queue"], inactivity_timeout=1):
+        for method, props, body in ch.consume(profile["queue"], inactivity_timeout=1):
             if method is not None:
                 handle(ch, method, body, profile, window, name)
             if window.due():
