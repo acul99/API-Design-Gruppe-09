@@ -1,0 +1,53 @@
+name: iot-realtime-analysis
+
+x-worker: &worker
+  build: .
+  environment:
+    AMQP_URL: amqp://${RABBITMQ_USER:-iot}:${RABBITMQ_PASSWORD:-iot-demo-password}@rabbitmq:5672/%2F
+    IOT_NAMESPACE: ${IOT_NAMESPACE:-iotlab}
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+  restart: "on-failure:3"
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.3.6-management
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-iot}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-iot-demo-password}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+  producer:
+    <<: *worker
+    command: ["producer", "--interval", "0.5"]
+  environment:
+    <<: *worker
+    command: ["analysis", "--kind", "environment"]
+  machinery:
+    <<: *worker
+    command: ["analysis", "--kind", "machinery"]
+  alarm:
+    <<: *worker
+    command: ["alarm"]
+  monitor:
+    <<: *worker
+    command: ["monitor"]
+  demo:
+    <<: *worker
+    profiles: ["tools"]
+    restart: "no"
+    command: ["demo", "--scenario", "all"]
+
+volumes:
+  rabbitmq-data:
