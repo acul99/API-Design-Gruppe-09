@@ -153,6 +153,7 @@ def handle(ch, method, body, profile, window, name):
     """Verarbeitet eine Sensornachricht, erkennt Anomalien, versendet Alarme und behandelt Fehler mittels ACK/NACK."""
     tag = method.delivery_tag
     started = time.perf_counter()
+    alarm_count = 0
     try:
         msg = validate(body, profile["types"])
         if FAIL_SENSOR_ID and msg["sensor_id"] == FAIL_SENSOR_ID:
@@ -184,8 +185,18 @@ def handle(ch, method, body, profile, window, name):
                 priority=SEVERITY_PRIORITY[severity],
                 mandatory=True,
             )
+            alarm_count +=1
             log.warning("ALARM %s: %s=%s (Regel: %s) von %s", severity, msg["type"], msg["value"], condition, msg["sensor_id"])
-            emit(ch, "alert", consumer=name, severity=severity, type=msg["type"], sensor_id=msg["sensor_id"])
+            emit(ch,
+                 "alert",
+                 event_id=f"{name}:{msg['message_id']}",
+                 consumer=name,
+                 severity=severity,
+                 type=msg["type"],
+                 sensor_id=msg["sensor_id"],
+                 alarm_count=alarm_count,
+                 processing_ms=round((time.perf_counter() - started) * 1000, 3),
+                 )
 
         # Letzter Schritt vor dem ACK, kann nicht fehlschlagen: so wird bei einem Retry
         # kein Wert doppelt ins Fenster aufgenommen.
@@ -213,9 +224,11 @@ def handle(ch, method, body, profile, window, name):
     emit(
         ch,
         "processed",
+        event_id=f"{name}:{msg['message_id']}",
         consumer=name,
         type=msg["type"],
         sensor_id=msg["sensor_id"],
+        alarm_count=alarm_count,
         processing_ms=round((time.perf_counter() - started) * 1000, 3),
     )
 
