@@ -187,16 +187,16 @@ def handle(ch, method, body, profile, window, name):
             )
             alarm_count +=1
             log.warning("ALARM %s: %s=%s (Regel: %s) von %s", severity, msg["type"], msg["value"], condition, msg["sensor_id"])
-            emit(ch,
-                 "alert",
-                 event_id=f"{name}:{msg['message_id']}",
-                 consumer=name,
-                 severity=severity,
-                 type=msg["type"],
-                 sensor_id=msg["sensor_id"],
-                 alarm_count=alarm_count,
-                 processing_ms=round((time.perf_counter() - started) * 1000, 3),
-                 )
+            #emit(ch,
+            #     "alert",
+            #     event_id=f"{name}:{msg['message_id']}",
+            #     consumer=name,
+            #     severity=severity,
+            #     type=msg["type"],
+            #     sensor_id=msg["sensor_id"],
+            #     alarm_count=alarm_count,
+            #     processing_ms=round((time.perf_counter() - started) * 1000, 3),
+            #     )
 
         # Letzter Schritt vor dem ACK, kann nicht fehlschlagen: so wird bei einem Retry
         # kein Wert doppelt ins Fenster aufgenommen.
@@ -222,7 +222,7 @@ def handle(ch, method, body, profile, window, name):
         return
 
     ch.basic_ack(tag)
-    print("ACK")
+    #print("ACK")
     emit(
         ch,
         "processed",
@@ -243,7 +243,7 @@ def flush_window(ch, window, name):
             result["window_seconds"], result["type"], result["count"],
             result["avg"], result["min"], result["max"],
         )
-        emit(ch, "aggregate", consumer=name, **result)
+        #emit(ch, "aggregate", consumer=name, **result)
 
 
 def consume(profile, name):
