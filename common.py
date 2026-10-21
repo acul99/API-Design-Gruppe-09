@@ -34,7 +34,7 @@ QUEUE_ALARMS = "alarms"
 QUEUE_MONITORING = "monitoring.events"
 QUEUE_DLQ = "iot.dlq"
 
-MESSAGE_TTL_MS = 60_000
+MESSAGE_TTL_MS = 60000
 DELIVERY_LIMIT = 5          # Sicherheitsnetz des Brokers gegen Crash-Loops (Quorum Queues)
 MAX_PRIORITY = 10
 SEVERITY_PRIORITY = {"WARNING": 5, "CRITICAL": 9}
@@ -126,7 +126,7 @@ def declare_topology(ch):
         durable=True,
         arguments={
             "x-queue-type": "quorum",
-            "x-message-ttl": 60000,
+            "x-message-ttl": MESSAGE_TTL_MS,
             "x-dead-letter-exchange": "iot.dlx",
             "x-dead-letter-routing-key": "dead.letter",
         },
