@@ -1,20 +1,23 @@
+import json
 import uuid
 import random
 from contextlib import suppress
-
 import pika
 from datetime import datetime
 import time
 
 MAX_RETRIES = 5
+EXCHANGE = "iot.events"
 
+#Sensor Typen und min max an möglichen Measurements definieren
 SENSORS = {
-    "temperature": [-10.0, 110,0], #°C
-    "humidity": [30.0, 100,0],
-    "pressure": [ 900.0, 1100,0], # hPa Normal: 1010-1026, Tief: 980- 1010; Hoch: 1025-1045
+    "temperature": [-10.0, 110.0, "temperature", "temp-01"], #°C
+    "humidity": [30.0, 100.0, "humidity", "hum-01"],
+    "pressure": [ 900.0, 1100.0, "pressure", "pres-01"], # hPa Normal: 1010-1026, Tief: 980- 1010; Hoch: 1025-1045
 }
 
 
+#Neues Measurement generieren
 def create_measurement(sensor_type, sensor_id):
     return {
         "message_id": str(uuid.uuid4()),
@@ -27,14 +30,116 @@ def create_measurement(sensor_type, sensor_id):
 
 class SensorProducer:
     def __init__(self):
-        self.connection = None,
+        self.connection = None
         self.channel = None
+
+        self.connect()
 
     def connect(self):
         print("Connecting to RabbitMQ")
+        self.connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host='localhost',
+                port=5672,
+                credentials=pika.PlainCredentials('guest', 'guest'),
+                heartbeat=60,
+                connection_attempts=1,  # Das stuern wir selber
+                socket_timeout=5,
+                stack_timeout=10,
+                blocked_connection_timeout=10,
+            )
+        )
+
+        self.channel = self.connection.channel()
+
+        self.channel.exchange_declare(
+            exchange=EXCHANGE,
+            exchange_type='topic',
+            durable=True,
+        )
+
+        #Create queues:
+        for queue_name in SENSORS.keys():
+            print(f"sensor.{queue_name}.{SENSORS[queue_name][3]}")
+            self.channel.queue_declare(
+                queue=f"sensor.{queue_name}.{SENSORS[queue_name][3]}",
+                durable=True,
+                arguments={"x-queue-type": "quorum"}
+            )
+
+            self.channel.queue_bind(
+                exchange=EXCHANGE,
+                queue=f"sensor.{queue_name}.{SENSORS[queue_name][3]}",
+                routing_key=f"sensor.{queue_name}.*",
+            )
+
+        self.channel.confirm_delivery()
+
+        print("Connected to RabbitMQ")
 
     def publish(self, message):
-        pass
+        routing_key = f"sensor.{message['sensor_type']}.{message['sensor_id']}"
+        body = json.dumps(message).encode("utf-8")
+
+        properties = pika.BasicProperties(
+            content_type='application/json',
+            content_encoding='utf-8',
+            delivery_mode=2,
+            message_id = message["message_id"],
+        )
+
+        #Maximale X Wiederholungen bei Übertragungsfehlern, exponentiell steigende Wartezeit zwischen den Wiederholungen, max. 10 Sekunden
+        for attempt in range(MAX_RETRIES + 1):
+
+            try:
+                if (self.connection is None
+                        or self.connection.is_closed
+                        or self.channel is None or self.channel.is_closed):
+                    print("No Connection!")
+                    self.close()
+                    self.connect()
+
+                self.channel.basic_publish(
+                    exchange=EXCHANGE,
+                    routing_key=routing_key,
+                    body=body,
+                    properties=properties,
+                    mandatory=True,
+                )
+                print(f"Gesendet: {routing_key} -> {message['value']}")
+
+                return
+            except pika.exceptions.UnroutableError as error:
+                raise RuntimeError(
+                    f"Keine passende Queue für {routing_key}. "
+                ) from error
+
+
+            except (
+                    pika.exceptions.AMQPConnectionError,
+                    pika.exceptions.ChannelWrongStateError,
+                    pika.exceptions.NackError,
+                    OSError,
+
+            ) as error:
+                self.close()
+
+                if attempt == MAX_RETRIES:
+                    raise RuntimeError(
+                        "Übertragung nach fünf Wiederholungen "
+                        f"abgebrochen. Messung: {body.decode('utf-8')}"
+                    ) from error
+
+                #Exponentiel steigende Wartezeit zwischen den Wiederholungen, max. 10 Sekunden
+                delay = min(2 ** attempt, 10)
+
+                print(
+                    f"Übertragungsfehler: {error!r}. "
+                    f"Retry {attempt + 1}/{MAX_RETRIES} "
+                    f"in {delay} Sekunden."
+                )
+                time.sleep(delay)
+
 
     def close(self):
         if self.connection is not None and self.connection.is_open:
@@ -42,22 +147,12 @@ class SensorProducer:
                 self.connection.close()
 
 
-
-connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
-channel = connection.channel()
-
-channel.queue_declare(queue='temperatur', durable=True, arguments={'x-queue-type': 'quorum'})
-
-
-
-
 def main():
-    print("Jello")
     producer = SensorProducer()
     try:
         while True:
-            for sensor in SENSORS:
-                message = create_measurement(*sensor)
+            for sensor in SENSORS.keys():
+                message = create_measurement(SENSORS[sensor][2], SENSORS[sensor][3])
                 producer.publish(message)
 
             time.sleep(2)
