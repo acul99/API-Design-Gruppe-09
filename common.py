@@ -85,7 +85,7 @@ def declare_topology(ch):
     """
     # Dead Letter Infrastruktur
     ch.exchange_declare(DLX, "fanout", durable=True)
-    ch.queue_declare(QUEUE_DLQ, durable=True, arguments={"x-queue-type": "quorum"})
+    ch.queue_declare(QUEUE_DLQ, durable=True, )
     ch.queue_bind(QUEUE_DLQ, DLX)
     dead = {"x-dead-letter-exchange": DLX}
 

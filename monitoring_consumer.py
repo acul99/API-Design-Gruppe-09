@@ -11,7 +11,7 @@ import pika
 
 
 EXCHANGE = "iot.events"
-QUEUE = "monitoring.event"
+QUEUE = "monitoring.events"
 
 MAX_RETRIES = 5
 REPORT_INTERVAL = 5
@@ -65,19 +65,19 @@ class MonitoringConsumer:
 
         # Dieselbe DLX-/DLQ-Konfiguration wie im Producer.
         self.channel.exchange_declare(
-            exchange="dlx",
-            exchange_type="direct",
+            exchange="iot.dlx",
+            exchange_type="fanout",
             durable=True,
         )
 
         self.channel.queue_declare(
-            queue="dlq",
+            queue="iot.dlq",
             durable=True,
         )
 
         self.channel.queue_bind(
-            exchange="dlx",
-            queue="dlq",
+            exchange="iot.dlx",
+            queue="iot.dlq",
             routing_key="dead.letter",
         )
 
@@ -87,7 +87,7 @@ class MonitoringConsumer:
             arguments={
                 "x-queue-type": "quorum",
                 "x-message-ttl": 60000,
-                "x-dead-letter-exchange": "dlx",
+                "x-dead-letter-exchange": "iot.dlx",
                 "x-dead-letter-routing-key": "dead.letter",
             },
         )

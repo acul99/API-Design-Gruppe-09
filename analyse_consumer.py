@@ -144,6 +144,7 @@ def emit(ch, event, **fields):
     """Monitoring-Event ueber RabbitMQ. Telemetrie darf die Verarbeitung nie stören."""
     payload = {"event": event, "ts": datetime.now(timezone.utc).isoformat(), **fields}
     try:
+        print("Monitoring")
         publish_json(ch, MONITOR_EXCHANGE, f"monitor.{event}", payload, persistent=False)
     except pika.exceptions.AMQPError as exc:
         log.warning("Monitoring-Event %s nicht gesendet: %s", event, exc)
