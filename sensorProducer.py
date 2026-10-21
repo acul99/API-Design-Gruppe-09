@@ -54,15 +54,15 @@ class SensorProducer:
 
         #DLX und DLQ erstellen
         self.channel.exchange_declare(
-            exchange="dlx",
-            exchange_type='direct',
+            exchange="iot.dlx",
+            exchange_type='fanout',
             durable=True
             )
 
-        self.channel.queue_declare(queue="dlq", durable=True)
+        self.channel.queue_declare(queue="iot.dlq", durable=True)
         self.channel.queue_bind(
-            exchange="dlx",
-            queue="dlq",
+            exchange="iot.dlx",
+            queue="iot.dlq",
             routing_key="dead.letter",
         )
 
@@ -82,7 +82,7 @@ class SensorProducer:
                 arguments={
                     "x-queue-type": "quorum",
                     "x-message-ttl": 60000,  # TTL 60 Sekunden
-                    "x-dead-letter-exchange": "dlx", #dlx
+                    "x-dead-letter-exchange": "iot.dlx", #dlx
                     "x-dead-letter-routing-key": "dead.letter", #dl Key
                 }
             )

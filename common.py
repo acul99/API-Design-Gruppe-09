@@ -26,6 +26,7 @@ ALERT_EXCHANGE = "alerts"          # direct: Routing Key = Severity
 MONITOR_EXCHANGE = "monitoring"    # topic: monitor.<event>
 DLX = "iot.dlx"                    # fanout: sammelt alle toten Nachrichten
 
+
 # Queues
 QUEUE_CLIMATE = "analysis.climate"
 QUEUE_PRESSURE = "analysis.pressure"
