@@ -9,9 +9,10 @@ from contextlib import suppress
 
 import pika
 
+from common import MONITOR_EXCHANGE, QUEUE_MONITORING
 
-EXCHANGE = "iot.events"
-QUEUE = "monitoring.events"
+EXCHANGE = MONITOR_EXCHANGE
+QUEUE = QUEUE_MONITORING
 
 MAX_RETRIES = 5
 REPORT_INTERVAL = 5
@@ -95,7 +96,7 @@ class MonitoringConsumer:
         self.channel.queue_bind(
             exchange=EXCHANGE,
             queue=QUEUE,
-            routing_key="monitoring.#",
+            routing_key="monitor.#",
         )
 
         self.channel.basic_qos(prefetch_count=10)
