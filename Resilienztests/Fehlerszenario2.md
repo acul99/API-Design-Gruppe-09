@@ -1,4 +1,4 @@
-faultyProducer sendet alle x Sekunden eine Nachricht mit falschem Typ
+Fehlerszenario 2: faultyProducer sendet alle x Sekunden eine Nachricht mit falschem Typ
 
 
 1. Producer sendet jede n-te Nachricht defekt (mit falschem Typ)

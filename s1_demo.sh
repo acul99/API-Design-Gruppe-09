@@ -3,15 +3,18 @@
 # und startet ihn nach weiteren 10 s neu (Resilienztest A: Consumer-Ausfall).
 #
 # Aufruf:  ./demo_resilienz.sh        (Ctrl+C beendet alles)
-# Optional: KILL_AFTER=10 DOWN_FOR=10 ALARM_WORK_MS=3000 ./demo_resilienz.sh
+# Optional: KILL_AFTER=10 DOWN_FOR=10 ALARM_WORK_MS=3000 CYCLES=3 ./demo_resilienz.sh
 # Beim Beenden (Ctrl+C) werden alle Prozesse gestoppt und ALLE Queues geloescht.
 # Schau dir vorher Queues und DLQ im Management UI an, danach ist alles weg.
 
 cd "$(dirname "$0")" || exit 1
 [ -f .venv/bin/activate ] && source .venv/bin/activate
 
+CYCLES=10 KILL_AFTER=20 DOWN_FOR=30 ALARM_WORK_MS=3000
+
 KILL_AFTER=${KILL_AFTER:-10}      # Sekunden bis zum Abbruch
 DOWN_FOR=${DOWN_FOR:-10}          # Sekunden Ausfall, muss unter der TTL von 60 s liegen
+CYCLES=${CYCLES:-1}               # Anzahl Abbruch/Neustart-Durchlaeufe (Betrieb dazwischen: KILL_AFTER)
 export ALARM_WORK_MS=${ALARM_WORK_MS:-3000}   # lange Verarbeitung: beim Kill ist ein Alarm "in flight"
 
 # RabbitMQ (Homebrew) starten und auf Port 5672 warten. rabbitmqctl liegt nicht im PATH.
@@ -40,7 +43,7 @@ PIDS=()
 cleanup() {
   trap '' INT TERM
   echo; echo "[$(date +%T)] Beende alle Prozesse ..."
-  kill "${PIDS[@]}" "$TAIL_PID" 2>/dev/null
+  kill "${PIDS[@]}" "$TAIL_PID" "$STATUS_PID" 2>/dev/null
   wait "${PIDS[@]}" 2>/dev/null   # erst loeschen, wenn niemand mehr Queues neu deklariert
   echo "[$(date +%T)] Loesche alle Queues"
   delete_all_queues
@@ -55,10 +58,20 @@ if [ "${CLEAN_START:-0}" = "1" ]; then
   delete_all_queues
 fi
 
-queue_status() {
-  command -v rabbitmqctl >/dev/null || return 0
-  rabbitmqctl list_queues name messages_ready messages_unacknowledged --quiet 2>/dev/null \
-    | grep -E "^(alarms|iot.dlq)" | sed 's/^/    /'
+# Zeigt alle paar Sekunden, was im Broker liegt: wartende und in Arbeit befindliche Alarme, DLQ.
+status_loop() {
+  while true; do
+    rabbitmqctl list_queues name messages_ready messages_unacknowledged --quiet --no-table-headers 2>/dev/null \
+      | awk -v t="$(date +%T)" '
+          $1=="alarms" {a=$2; u=$3; seen=1}
+          $1=="iot.dlq" {d=$2}
+          END {
+            if (!seen) { a = "-"; u = "-" }
+            if (d == "") d = "-"
+            printf "[%s] QUEUE alarms: %s wartend, %s in Arbeit | DLQ: %s\n", t, a, u, d
+          }'
+    sleep 2
+  done
 }
 
 echo "[$(date +%T)] Starte Consumer und Producer"
@@ -69,19 +82,23 @@ python alarm_consumer.py            >> logs/alarm.log    2>&1 & ALARM_PID=$!; PI
 sleep 2
 python sensorProducer.py            >> logs/producer.log 2>&1 & PIDS+=($!)
 
-# Ausgaben von Alarm- und Monitoring-Consumer live anzeigen
-tail -n0 -f logs/alarm.log logs/monitor.log &
+# Live-Anzeige: Alarm-Log und Queue-Stand. Das Monitoring-Log liegt in logs/monitor.log.
+tail -n0 -f logs/alarm.log &
 TAIL_PID=$!
+status_loop &
+STATUS_PID=$!
 
-sleep "$KILL_AFTER"
-echo; echo "[$(date +%T)] >>> kill -9 alarm_consumer (PID $ALARM_PID)"
-echo "  Queues davor (messages_ready / unacked):"; queue_status
-kill -9 "$ALARM_PID" 2>/dev/null
+for i in $(seq 1 "$CYCLES"); do
+  sleep "$KILL_AFTER"
+  echo; echo "=========== [$(date +%T)] ABSTURZ $i/$CYCLES: kill -9 alarm_consumer (PID $ALARM_PID) ==========="
+  echo "            Der Alarm 'in Arbeit' bleibt unbestaetigt und geht zurueck in die Queue."
+  kill -9 "$ALARM_PID" 2>/dev/null
 
-sleep "$DOWN_FOR"
-echo; echo "[$(date +%T)] >>> Alarm-Consumer ist seit ${DOWN_FOR}s aus"
-echo "  Queues vor dem Neustart (Alarme haben sich gesammelt):"; queue_status
-python alarm_consumer.py >> logs/alarm.log 2>&1 & ALARM_PID=$!; PIDS+=($ALARM_PID)
-echo "[$(date +%T)] >>> Alarm-Consumer neu gestartet (PID $ALARM_PID), Ctrl+C beendet alles"; echo
+  sleep "$DOWN_FOR"
+  echo; echo "=========== [$(date +%T)] NEUSTART $i/$CYCLES nach ${DOWN_FOR}s (Alarme haben sich gesammelt) ==========="
+  python alarm_consumer.py >> logs/alarm.log 2>&1 & ALARM_PID=$!; PIDS+=($ALARM_PID)
+  echo "            Neuer Alarm-Consumer (PID $ALARM_PID)."
+done
+echo; echo "            Alle $CYCLES Durchlaeufe fertig. Ctrl+C beendet alles und loescht die Queues."; echo
 
 wait "$TAIL_PID"

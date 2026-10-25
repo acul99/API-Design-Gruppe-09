@@ -5,7 +5,6 @@ Demo:   ALARM_WORK_MS=500 python alarm_consumer.py   (macht die Reihenfolge sich
 """
 import json
 import logging
-import os
 import time
 
 import pika
@@ -34,7 +33,7 @@ def handle(ch, method, body):
     else:
         try:
             time.sleep(WORK_MS / 1000)   # hier stünde die echte Reaktion (Mail, Ticket, ...)
-            log.warning("%s %s von %s: %s", alarm["severity"], alarm["type"],
+            log.warning("ALARM %s %s von %s: %s", alarm["severity"], alarm["type"],
                         alarm["sensor_id"], alarm["value"])
         except Exception as exc:
             # Erster Fehler: einmal neu zustellen, danach in die DLQ

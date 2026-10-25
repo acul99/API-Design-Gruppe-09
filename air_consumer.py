@@ -1,3 +1,0 @@
-
-#Humidity + Pressure
-

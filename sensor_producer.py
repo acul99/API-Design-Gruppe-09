@@ -6,6 +6,12 @@ import pika
 from datetime import datetime
 import time
 
+from common import declare_topology
+
+import logging
+
+log = logging.getLogger("sensor_producer")
+
 MAX_RETRIES = 5
 EXCHANGE = "iot.events"
 
@@ -36,7 +42,7 @@ class SensorProducer:
         self.connect()
 
     def connect(self):
-        print("Connecting to RabbitMQ")
+        log.info("Connecting to RabbitMQ")
         self.connection = pika.BlockingConnection(
             pika.ConnectionParameters(
                 host='localhost',
@@ -52,50 +58,11 @@ class SensorProducer:
 
         self.channel = self.connection.channel()
 
-        #DLX und DLQ erstellen
-        self.channel.exchange_declare(
-            exchange="iot.dlx",
-            exchange_type='fanout',
-            durable=True
-            )
-
-        self.channel.queue_declare(queue="iot.dlq", durable=True,)
-        self.channel.queue_bind(
-            exchange="iot.dlx",
-            queue="iot.dlq",
-            routing_key="dead.letter",
-        )
-
-
-        self.channel.exchange_declare(
-            exchange=EXCHANGE,
-            exchange_type='topic',
-            durable=True,
-        )
-
-        #Create queues:
-        for queue_name in SENSORS.keys():
-            print(f"sensor.{queue_name}.{SENSORS[queue_name][3]}")
-            self.channel.queue_declare(
-                queue=f"sensor.{queue_name}.{SENSORS[queue_name][3]}",
-                durable=True,
-                arguments={
-                    "x-queue-type": "quorum",
-                    "x-message-ttl": 60000,  # TTL 60 Sekunden
-                    "x-dead-letter-exchange": "iot.dlx", #dlx
-                    "x-dead-letter-routing-key": "dead.letter", #dl Key
-                }
-            )
-
-            self.channel.queue_bind(
-                exchange=EXCHANGE,
-                queue=f"sensor.{queue_name}.{SENSORS[queue_name][3]}",
-                routing_key=f"sensor.{queue_name}.*",
-            )
+        declare_topology(self.channel)
 
         self.channel.confirm_delivery()
 
-        print("Connection Established")
+        log.info("Connection Established")
 
     def publish(self, message):
         routing_key = f"sensor.{message['sensor_type']}.{message['sensor_id']}"
@@ -114,7 +81,7 @@ class SensorProducer:
                 if (self.connection is None
                         or self.connection.is_closed
                         or self.channel is None or self.channel.is_closed):
-                    print("No Connection!")
+                    log.warning("No Connection!")
                     self.close()
                     self.connect()
 
@@ -126,7 +93,7 @@ class SensorProducer:
                     mandatory=True,
 
                 )
-                print(f"Gesendet: {routing_key} -> {message['value']}")
+                log.info(f"Gesendet: {routing_key} -> {message['value']}")
 
                 return
             except pika.exceptions.UnroutableError as error:
@@ -153,7 +120,7 @@ class SensorProducer:
                 #Exponentiel steigende Wartezeit zwischen den Wiederholungen, max. 10 Sekunden
                 delay = min(2 ** attempt, 10)
 
-                print(
+                log.error(
                     f"Übertragungsfehler: {error!r}. "
                     f"Retry {attempt + 1}/{MAX_RETRIES} "
                     f"in {delay} Sekunden."

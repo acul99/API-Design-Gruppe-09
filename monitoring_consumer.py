@@ -2,6 +2,7 @@
 # der Alarm COnsumer bracuht den  Exchange Typ Headers: Für type = Critical
 
 import json
+import logging
 import math
 import time
 from collections import Counter
@@ -17,6 +18,7 @@ QUEUE = QUEUE_MONITORING
 MAX_RETRIES = 5
 REPORT_INTERVAL = 5
 
+log = logging.getLogger("monitoring")
 
 class MonitoringConsumer:
     def __init__(self):
@@ -177,18 +179,18 @@ class MonitoringConsumer:
             else 0.0
         )
 
-        print("\n--- Monitoring seit Programmstart ---")
-        print(f"Gemeldete Verarbeitungen: {self.successful + self.failed}")
-        print(f"Erfolgreich:             {self.successful}")
-        print(f"Fehlgeschlagen:          {self.failed}")
-        print(f"Erzeugte Alarme:         {self.alarms}")
-        print(f"Ø Analysezeit:           {average_ms:.2f} ms")
+        log.info("\n--- Monitoring seit Programmstart ---")
+        log.info(f"Gemeldete Verarbeitungen: {self.successful + self.failed}")
+        log.info(f"Erfolgreich:             {self.successful}")
+        log.info(f"Fehlgeschlagen:          {self.failed}")
+        log.info(f"Erzeugte Alarme:         {self.alarms}")
+        log.info(f"Ø Analysezeit:           {average_ms:.2f} ms")
 
         print("Verarbeitungen je Sensortyp:")
         for sensor_type, count in sorted(self.messages_by_type.items()):
-            print(f"  {sensor_type}: {count}")
+            log.info(f"  {sensor_type}: {count}")
 
-        print(f"Ungültige Monitoring-Ereignisse: {self.invalid_events}")
+        log.info(f"Ungültige Monitoring-Ereignisse: {self.invalid_events}")
 
     def consume(self):
         next_report = time.monotonic() + REPORT_INTERVAL
