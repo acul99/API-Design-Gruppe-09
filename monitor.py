@@ -5,18 +5,18 @@ import json
 import math
 import time
 
-from common import MONITOR_QUEUE, close, open_channel
+from common import MONITOR_QUEUE, close, open_channel, run_consumer
 
 
 def main():
     connection, channel = open_channel()
-    channel.basic_qos(prefetch_count=100)
     processed = alarms = failures = 0
     total_ms = 0.0
     per_type = Counter()
     next_report = time.monotonic() + 5
-    print("BEREIT monitor", flush=True)
     try:
+        channel.basic_qos(prefetch_count=100)
+        print("BEREIT monitor", flush=True)
         for method, _, body in channel.consume(MONITOR_QUEUE, inactivity_timeout=0.2, auto_ack=False):
             if time.monotonic() >= next_report:
                 average = total_ms / processed if processed else 0
@@ -52,6 +52,6 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        run_consumer(main)
     except KeyboardInterrupt:
         pass

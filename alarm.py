@@ -2,14 +2,14 @@
 
 import json
 
-from common import ALARM_QUEUE, close, emit_metric, open_channel
+from common import ALARM_QUEUE, close, emit_metric, open_channel, run_consumer
 
 
 def main():
     connection, channel = open_channel()
-    channel.basic_qos(prefetch_count=1)
-    print("BEREIT alarm", flush=True)
     try:
+        channel.basic_qos(prefetch_count=1)
+        print("BEREIT alarm", flush=True)
         for method, properties, body in channel.consume(ALARM_QUEUE, auto_ack=False):
             try:
                 alarm = json.loads(body)
@@ -32,6 +32,6 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        run_consumer(main)
     except KeyboardInterrupt:
         pass

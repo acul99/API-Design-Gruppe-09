@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import time
 
 import pika
 
@@ -61,6 +62,32 @@ def open_channel():
         raise
 
 
+def run_consumer(worker, *args):
+    """Verbindungsabbrueche mit Backoff behandeln, dauerhafte Fehler weitergeben."""
+    delay = 1
+    while True:
+        started = time.monotonic()
+        try:
+            return worker(*args)
+        except (pika.exceptions.AMQPConnectionError, OSError) as error:
+            recoverable = (
+                type(error) is pika.exceptions.AMQPConnectionError
+                or isinstance(error, (OSError, pika.exceptions.StreamLostError,
+                                      pika.exceptions.AMQPHeartbeatTimeout,
+                                      pika.exceptions.ConnectionBlockedTimeout))
+                or (isinstance(error, pika.exceptions.ConnectionClosedByBroker)
+                    and error.reply_code in (320, 541))
+            )
+            if not recoverable:
+                raise
+            # Nach einer stabilen Sitzung beginnt eine neue Backoff-Folge.
+            if time.monotonic() - started >= 60:
+                delay = 1
+            print(f"Consumer-Verbindung unterbrochen: neuer Versuch in {delay}s ({error})", flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, 10)
+
+
 def publish(channel, routing_key, payload, priority=0, exchange=EVENT_EXCHANGE):
     channel.basic_publish(
         exchange=exchange, routing_key=routing_key,
@@ -83,7 +110,12 @@ def emit_metric(channel, status, message_id, sensor_type="unknown", alarm=False,
 
 def parse_sensor(body, routing_key):
     """Pflichtfelder pruefen, bevor eine Messung verarbeitet wird."""
-    sensor = json.loads(body)
+    try:
+        sensor = json.loads(body)
+        # Auch Zusatzfelder werden in Alarmen weitergeleitet und muessen JSON bleiben.
+        json.dumps(sensor, allow_nan=False)
+    except RecursionError as error:
+        raise ValueError("JSON ist zu tief verschachtelt") from error
     if not isinstance(sensor, dict):
         raise ValueError("Ein JSON-Objekt ist erforderlich")
     sensor_id, kind, value = sensor.get("sensor_id"), sensor.get("type"), sensor.get("value")
@@ -103,7 +135,8 @@ def parse_sensor(body, routing_key):
     if routing_key != f"sensors.{kind}.{sensor_id}":
         raise ValueError("Routing Key passt nicht zur Messung")
     sensor.setdefault("message_id", hashlib.sha256(body).hexdigest())
-    if not isinstance(sensor["message_id"], str) or not sensor["message_id"]:
+    message_id = sensor["message_id"]
+    if not isinstance(message_id, str) or not message_id or len(message_id.encode("utf-8")) > 255:
         raise ValueError("Ungueltige message_id")
     return sensor
 

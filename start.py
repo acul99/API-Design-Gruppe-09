@@ -6,8 +6,6 @@ import sys
 from threading import Thread
 import time
 
-from common import close, open_channel
-
 
 def show_output(process):
     """Ausgaben eines Kindprozesses im Terminal des Starters anzeigen."""
@@ -17,8 +15,6 @@ def show_output(process):
 
 
 def main():
-    connection, _ = open_channel()
-    close(connection)
     root = Path(__file__).resolve().parent
     processes = []
     output_threads = []

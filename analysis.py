@@ -5,7 +5,7 @@ import math
 import time
 
 from common import (ENV_QUEUE, MACHINE_QUEUE, close,
-                    emit_metric, open_channel, parse_sensor, publish)
+                    emit_metric, open_channel, parse_sensor, publish, run_consumer)
 
 
 def alarm_level(sensor):
@@ -24,12 +24,12 @@ def summarize(values):
 
 def main(kind, delay=0):
     connection, channel = open_channel()
-    channel.basic_qos(prefetch_count=100)
     queue = ENV_QUEUE if kind == "environment" else MACHINE_QUEUE
     window_end = time.monotonic() + 10
     pending = []
-    print(f"BEREIT {kind}", flush=True)
     try:
+        channel.basic_qos(prefetch_count=100)
+        print(f"BEREIT {kind}", flush=True)
         for method, properties, body in channel.consume(queue, inactivity_timeout=0.2, auto_ack=False):
             # Der Timer laeuft auch dann, wenn gerade keine neue Nachricht kommt.
             if time.monotonic() >= window_end:
@@ -86,6 +86,6 @@ if __name__ == "__main__":
     if args.delay < 0:
         parser.error("delay darf nicht negativ sein")
     try:
-        main(args.kind, args.delay)
+        run_consumer(main, args.kind, args.delay)
     except KeyboardInterrupt:
         pass

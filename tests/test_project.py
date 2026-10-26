@@ -19,6 +19,40 @@ import start
 
 
 class StarterTests(unittest.TestCase):
+    def test_offline_consumers_stay_alive_until_producer_finishes_retries(self):
+        output, processes = StringIO(), []
+        real_popen = subprocess.Popen
+        # Run the real entrypoints with a deterministic outage and short test delays.
+        child_code = """
+import runpy, sys, time
+import common
+def offline():
+    raise common.pika.exceptions.AMQPConnectionError('simulated outage')
+common.open_channel = offline
+real_sleep = time.sleep
+time.sleep = lambda seconds: real_sleep(min(seconds, 0.01))
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+
+        def launch_child(command, **kwargs):
+            process = real_popen([*command[:4], "-c", child_code, *command[4:]], **kwargs)
+            process.terminate = Mock(wraps=process.terminate)
+            processes.append(process)
+            return process
+
+        with patch("start.subprocess.Popen", side_effect=launch_child), redirect_stdout(output):
+            with self.assertRaises(RuntimeError):
+                start.main()
+
+        self.assertEqual(len(processes), 5)
+        for retry in range(1, 6):
+            self.assertIn(f"Wiederholung {retry}/5", output.getvalue())
+        for consumer in processes[:4]:
+            consumer.terminate.assert_called_once()
+        processes[-1].terminate.assert_not_called()
+        self.assertNotEqual(processes[-1].returncode, 0)
+
     def test_child_output_and_errors_reach_parent_console(self):
         output = StringIO()
         real_popen, real_sleep = subprocess.Popen, time.sleep
@@ -35,8 +69,7 @@ class StarterTests(unittest.TestCase):
                 real_sleep(0.01)
             raise KeyboardInterrupt
 
-        with patch("start.open_channel", return_value=(Mock(), Mock())), \
-             patch("start.subprocess.Popen", side_effect=launch_child), \
+        with patch("start.subprocess.Popen", side_effect=launch_child), \
              patch("start.time.sleep", side_effect=stop_after_output), redirect_stdout(output):
             start.main()
         self.assertEqual(output.getvalue().count("CHILD-OUT"), 5)
