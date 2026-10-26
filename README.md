@@ -1,154 +1,125 @@
-# IoT-Echtzeitanalyse mit RabbitMQ
+# IoT-Sensordaten mit RabbitMQ
 
-Ein ausführbares Python-Projekt zur Bonusaufgabe „Echtzeit-Analyse von IoT-Sensordaten mit RabbitMQ“. Drei simulierte Sensortypen liefern JSON-Nachrichten. RabbitMQ verteilt sie an zwei Analyse-Consumer. Separate Consumer bearbeiten priorisierte Alarme und zeigen über RabbitMQ übertragene Monitoringdaten an.
+Ein kleines Vorlesungsprojekt mit Python und Pika: Drei simulierte Sensortypen liefern Messwerte. Zwei Analyse-Consumer erkennen Anomalien, ein Alarm-Consumer verarbeitet priorisierte Alarme und ein Monitoring-Consumer zeigt Kennzahlen. Die Anwendung besteht aus sieben Python-Dateien.
 
-## Schnellstart mit lokalem RabbitMQ
+## Start
 
-Voraussetzungen: Python ab 3.11 und ein laufender RabbitMQ-Broker. Die Anwendung benötigt als Laufzeitbibliothek ausschließlich Pika. Die Befehle im Projektordner ausführen.
-
-Wenn `.venv` bereits eingerichtet ist, genügt direkt
-`.\.venv\Scripts\python.exe -m iot_analysis run`. Für eine neue Installation:
+Voraussetzungen: Python ab 3.11 und ein laufender RabbitMQ auf `localhost:5672`.
 
 ```powershell
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .
-.\.venv\Scripts\python.exe -m iot_analysis check
-.\.venv\Scripts\python.exe -m iot_analysis run
+python -m pip install -r requirements.txt
+python start.py
 ```
 
-Unter Linux/macOS entsprechend `python3 -m venv .venv` und `.venv/bin/python` verwenden. Ist Python bereits aktiviert, genügt in allen folgenden Beispielen `python`.
+In der bereits eingerichteten Projektumgebung auf diesem Rechner genügt:
 
-Falls der Windows-Python-Launcher `py` fehlt, ein installiertes `python` oder `uv venv .venv` verwenden. Eine bereits eingerichtete Projektumgebung lässt sich unmittelbar mit `.\.venv\Scripts\python.exe -m iot_analysis run` starten. Das Hilfsskript `powershell -ExecutionPolicy Bypass -File scripts\Start-Demo.ps1 -Mode run` verwendet ebenfalls diese Umgebung.
+```powershell
+.\.venv\Scripts\python.exe start.py
+```
 
-`run` startet Producer, beide Analyse-Consumer, Alarm-Consumer und Monitoring-Consumer als getrennte Prozesse. Nach spätestens zehn Sekunden erscheint eine Temperaturaggregation. `Strg+C` beendet die gestarteten Prozesse. Die RabbitMQ-Daten bleiben erhalten.
+`start.py` startet fünf Prozesse: einen Producer, zwei Analysen, Alarm und Monitoring. Nach etwa zehn Sekunden erscheint das erste Temperaturaggregat. `Strg+C` beendet die gestarteten Prozesse. Der Broker und seine Nachrichten bleiben erhalten.
 
-Die Standardverbindung lautet `amqp://guest:guest@localhost:5672/%2F`. RabbitMQ beschränkt das Konto `guest` standardmäßig auf lokale Verbindungen. Ein eigener Broker lässt sich über die Umgebung einstellen:
+Falls kein Broker installiert ist, stellt optional Docker Compose ausschließlich RabbitMQ bereit:
+
+```powershell
+docker compose up -d
+```
+
+Ein bereits laufender lokaler Broker reicht aus. Für einen anderen Broker die Verbindungsadresse setzen:
 
 ```powershell
 $env:AMQP_URL = 'amqp://benutzer:passwort@localhost:5672/%2F'
-$env:IOT_NAMESPACE = 'meine_gruppe'
-python -m iot_analysis run
+python start.py
 ```
 
-Bei Sonderzeichen im Benutzernamen, Passwort oder Virtual Host die URL-Bestandteile entsprechend URL-kodieren. Der Namespace trennt die Exchanges und Queues verschiedener Projektinstanzen im selben Virtual Host.
+Standard ist `amqp://guest:guest@localhost:5672/%2F`. Das Konto `guest` ist für lokale Verbindungen vorgesehen.
 
-## Alternative mit Docker Compose
+## Die sieben Dateien
+
+| Datei | Aufgabe |
+| --- | --- |
+| `common.py` | Verbindung, JSON-Prüfung, Queue-Deklaration und Publikation |
+| `producer.py` | Temperatur, Luftfeuchtigkeit und Vibration simulieren |
+| `analysis.py` | Umgebung oder Maschine analysieren, Alarmregeln und Temperaturfenster |
+| `alarm.py` | WARNING und CRITICAL nach Brokerpriorität verarbeiten |
+| `monitor.py` | Über RabbitMQ empfangene Kennzahlen ausgeben |
+| `demo.py` | Zwei echte, isolierte Fehlerszenarien durchführen |
+| `start.py` | Alle Dienste starten und gemeinsam beenden |
+
+Zum Erklären lassen sich die Dienste auch einzeln in fünf Terminals starten:
+
+```text
+python producer.py
+python analysis.py environment
+python analysis.py machinery
+python alarm.py
+python monitor.py
+```
+
+Jeder Dienst deklariert die benötigte Topologie automatisch. Ein separates Setup-Kommando ist nicht erforderlich.
+
+## Nachrichtenfluss mit zwei Exchanges
+
+| Exchange | Typ | Routing Key / Binding | Zielqueue |
+| --- | --- | --- | --- |
+| `iot.sensors` | topic | `sensors.temperature.*`, `sensors.humidity.*` | `iot.environment` |
+| `iot.sensors` | topic | `sensors.vibration.*` | `iot.machinery` |
+| `iot.events` | direct | `WARNING`, `CRITICAL` | `iot.alarms` |
+| `iot.events` | direct | `monitor` | `iot.monitor` |
+| `iot.events` | direct | `dead` | `iot.dlq` |
+
+Topic filtert nach Sensortyp bereits im Broker. Direct reicht für die wenigen festen Ereignisschlüssel. Ein Fanout-Exchange für Sensoren würde unnötige Kopien an beide Analysen senden. Alarme, Monitoring und Dead Letters teilen einen Direct-Exchange, besitzen aber getrennte Queues.
+
+Eine Messung enthält direkt die geforderten JSON-Felder:
+
+```json
+{"sensor_id":"temp-01","timestamp":"2026-10-26T10:00:00Z","type":"temperature","value":92.5}
+```
+
+Die Simulation verwendet °C, relative Luftfeuchtigkeit in Prozent und Vibration in mm/s. Temperatur über 80/100 erzeugt WARNING/CRITICAL, Luftfeuchtigkeit außerhalb 30-70/15-85 und Vibration über 5/10 entsprechend. Die strengere Alarmstufe hat Vorrang. Diese Grenzwerte sind Annahmen für die Demonstration.
+
+## Zuverlässigkeit und Vorlesungsbegriffe
+
+- **Persistenz:** Durable Exchanges/Queues und Nachrichten mit `delivery_mode=2`. Publisher Confirms bestätigen die Brokerannahme, `mandatory=True` macht fehlendes Routing sichtbar.
+- **Exponential Backoff:** Nach dem ersten Versuch höchstens fünf Producer-Wiederholungen mit 1, 2, 4, 8 und 10 Sekunden Pause.
+- **Manuelle ACKs:** Erst nach erfolgreicher Verarbeitung und bestätigter Alarm-/Monitoringpublikation bestätigen. Temperaturwerte bleiben bis zum abgeschlossenen Zehn-Sekunden-Fenster unbestätigt.
+- **Aggregation:** Alle innerhalb eines zusammenhängenden Zehn-Sekunden-Fensters empfangenen gültigen Temperaturen ergeben Anzahl, Mittelwert, Minimum und Maximum. Ein Timer schließt das Fenster auch ohne neue Nachricht ab.
+- **Priorität:** Alarmqueue mit `x-max-priority=9`, WARNING mit Priorität 3, CRITICAL mit 9. Prefetch 1 begrenzt vorab ausgelieferte Alarme. Bereits laufende Verarbeitung wird nicht unterbrochen.
+- **TTL und DLQ:** Hauptqueues haben `x-message-ttl=60000` und leiten abgelaufene oder mit `requeue=False` abgelehnte Nachrichten über `iot.events` / `dead` an die DLQ. Die DLQ hat keine TTL und keine automatische Rückführung.
+- **Monitoring:** Ein eigener Consumer zählt verarbeitete Messungen, Werte je Typ, Alarme, Fehler und mittlere Verarbeitungszeit anhand eigener RabbitMQ-Nachrichten.
+
+Diese Begriffe stammen hauptsächlich aus Kapitel 3 der Vorlesung. Kapitel 2 erklärt die lose gekoppelte, asynchrone Kommunikation. JSON und Python/Pika/RabbitMQ entsprechen der Aufgabenstellung. gRPC ist für diesen Nachrichtenfluss nicht erforderlich.
+
+## Zwei reproduzierbare Fehlerszenarien
 
 ```powershell
-docker compose up --build
+python demo.py invalid
+python demo.py crash
 ```
 
-Compose stellt Broker und Anwendung bereit. Für einen bereits lokal laufenden Broker den lokalen Schnellstart verwenden, damit kein zweiter Dienst dieselben Ports beansprucht. `docker compose down` beendet die Container. Ein gegebenenfalls verwendetes Broker-Volume nur löschen, wenn dessen Nachrichten ausdrücklich verworfen werden sollen.
+Die Demos verwenden eigene Queuenamen und entfernen anschließend nur ihre eigenen RabbitMQ-Ressourcen.
 
-Die Management-Oberfläche ist unter `http://localhost:15672` erreichbar. Compose
-verwendet standardmäßig `iot` / `iot-demo-password` (über `.env` änderbar).
-Die Anwendung selbst liest `AMQP_URL` und `IOT_NAMESPACE` aus der Prozessumgebung;
-sie lädt eine `.env`-Datei nicht automatisch. Die `.env.example` dokumentiert beide Wege.
-Eine isolierte Demo innerhalb von Compose startet mit
-`docker compose --profile tools run --rm demo demo --scenario all`.
+| Szenario | Auslöser | ACK/NACK und Nachrichtenweg | Danach |
+| --- | --- | --- | --- |
+| `invalid` | Gezielt ungültige Sensornachricht | NACK ohne Requeue; tatsächlicher DLQ-Eintrag mit `x-death.reason=rejected` | Gültige Nachricht wird wieder verarbeitet |
+| `crash` | Analyseprozess während der Verarbeitung beenden | Weder ACK noch NACK; Broker stellt unbestätigte Nachricht nach Neustart erneut zu | Ersatzconsumer verarbeitet und bestätigt sie |
 
-Die Compose-Demo lässt sich in einem zweiten Terminal mit `docker compose --profile tools run --rm demo demo --scenario crash` ausführen. Das erste `demo` bezeichnet dabei den Compose-Dienst, das zweite den Unterbefehl der Anwendung.
+Ein Consumer-Absturz allein führt bei Classic-Queues zunächst zur erneuten Zustellung. Die DLQ greift bei expliziter Ablehnung ohne Requeue oder beim Ablauf wartender Nachrichten. Diese Präzisierung ist für die Erklärung der Vorlesungsfolie zu DLQ-Auslösern wichtig. Ungültige Nachrichten werden sofort abgelehnt und durchlaufen keine endlose Requeue-Schleife.
 
-## Dienste einzeln starten
+Tests für die kleine Logik ausführen:
 
-Für eine Live-Demo die Dienste in getrennten Terminals starten. So lassen sich Logausgaben und ein gezielter Consumer-Ausfall leichter beobachten.
-
-```text
-python -m iot_analysis topology
-python -m iot_analysis monitor
-python -m iot_analysis alarm
-python -m iot_analysis analysis --kind environment
-python -m iot_analysis analysis --kind machinery
-python -m iot_analysis producer
-```
-
-Der Producer simuliert Temperatur, Luftfeuchtigkeit und Vibration. Mit `--count 30 --interval 0.1 --seed 42` entsteht ein begrenzter, reproduzierbarer Lauf. `--count 0` bedeutet kontinuierliche Erzeugung.
-
-## Fehlerszenarien und Tests
-
-```text
-python -m iot_analysis demo --scenario invalid
-python -m iot_analysis demo --scenario processing
-python -m iot_analysis demo --scenario crash
-python -m iot_analysis demo --scenario priority
-python -m iot_analysis demo --scenario ttl
-python -m iot_analysis demo --scenario all
-python -m iot_analysis inspect --queue dlq
+```powershell
 python -m unittest discover -s tests -v
 ```
 
-Jedes Demo-Szenario verwendet eigene RabbitMQ-Ressourcen und räumt diese anschließend auf. Die regulären Queues werden dabei nicht geleert. `ttl` verwendet zusätzlich eine Nachrichten-TTL von einer Sekunde für einen schnellen Ablaufnachweis. `demo --scenario ttl --full-ttl` prüft die echte Queue-Grenze von 60 Sekunden ohne diese Verkürzung. Für die 15-minütige Präsentation reichen `invalid` und `crash` als zwei unterschiedliche Fehlerszenarien. `priority` ist eine kurze zusätzliche Demonstration.
+Mit `$env:RUN_RABBITMQ_TESTS = '1'` werden die beiden Fehlerdemos zusätzlich im Test ausgeführt; dafür muss RabbitMQ laufen.
 
-Broker-Integrationstests explizit aktivieren:
+Am 26.10.2026 lokal geprüft: sechs Logiktests, beide Fehlerdemos, Gesamtfluss mit Aggregation und Monitoring, Alarmpriorität, Start/Stop und echte 60-Sekunden-TTL. Alle Prüfungen bestanden. Docker Compose wurde hier nicht ausgeführt.
 
-```powershell
-$env:RUN_RABBITMQ_TESTS = '1'
-python -m unittest discover -s tests/integration -v
-```
+## Präsentation und Grenzen
 
-Mit zusätzlichem `$env:RUN_FULL_TTL_TEST = '1'` wird auch der ungefähr eine Minute
-dauernde Test der echten Queue-TTL ausgeführt. Ohne diese Variable ist nur dieser
-Langzeittest übersprungen.
+Die acht Folien stehen in [docs/Praesentation.pdf](docs/Praesentation.pdf), die kurzen Vortragsnotizen in [docs/VORTRAG.md](docs/VORTRAG.md). Der Ablauf umfasst 15 Minuten einschließlich vier Minuten Live-Demo. Gruppennamen vor dem Vortrag ergänzen.
 
-Die dokumentierten, tatsächlich ausgeführten Prüfungen stehen in [docs/TESTBERICHT.md](docs/TESTBERICHT.md).
+Der Prototyp verwendet einen einzelnen Broker und Auswertungen im Arbeitsspeicher. Mehrfachzustellung ist möglich, weil ausgehende Nachrichten und Quell-ACK keine gemeinsame Transaktion bilden. Monitoringwerte sind keine dauerhafte Buchhaltung. Bei einem Absturz können Temperaturwerte in einem neuen Fenster erneut erscheinen. Wiederholte echte Prozessabstürze durch einen unbekannten Programmfehler benötigen in einer produktiven Lösung einen dauerhaften Zustellungszähler. Die TTL begrenzt wartende Nachrichten und ist kein Zeitlimit für bereits ausgelieferte Verarbeitung.
 
-## Nachrichtenfluss
-
-```mermaid
-flowchart LR
-    P[Producer: Temperatur / Feuchte / Vibration] --> S[topic: sensors]
-    S -->|sensors.temperature.* und sensors.humidity.*| E[Analyse Umgebung]
-    S -->|sensors.vibration.*| M[Analyse Maschine]
-    E --> A[direct: alarms]
-    M --> A
-    A --> Q[Alarmqueue: Priorität 3 oder 9]
-    Q --> AC[Alarm-Consumer]
-    E --> T[fanout: telemetry]
-    M --> T
-    AC --> T
-    T --> MC[Monitoring-Consumer]
-    E -. NACK ohne Requeue / TTL .-> D[direct: dlx]
-    M -. NACK ohne Requeue / TTL .-> D
-    Q -. NACK ohne Requeue / TTL .-> D
-    MC -. NACK ohne Requeue / TTL .-> D
-    D --> DLQ[DLQ ohne TTL]
-```
-
-Die tatsächlichen Namen tragen das Präfix `iotlab.` oder den konfigurierten Namespace. Ein Exchange routet Nachrichten an gebundene Queues. Mehrere Consumer derselben Queue teilen sich deren Arbeit.
-
-## Erfüllung der Aufgabenstellung
-
-| Anforderung | Umsetzung |
-| --- | --- |
-| Mindestens drei Sensortypen | `temperature`, `humidity`, `vibration` |
-| JSON-Pflichtfelder | `sensor_id`, `timestamp`, `type`, `value` direkt im JSON |
-| Persistenz und Producer-Retry | Durable Topologie, `delivery_mode=2`, Publisher Confirms, maximal fünf Wiederholungen mit 1/2/4/8/10 Sekunden |
-| Zwei Analyse-Consumer und Brokerfilterung | Eigene Queues mit Topic-Bindings für Umgebung und Maschine |
-| Zehn-Sekunden-Aggregation | Temperaturfenster nach Empfangszeit mit Anzahl, Mittelwert, Minimum und Maximum |
-| Anomalien und separate Alarme | Grenzwerte für alle drei Typen, WARNING und CRITICAL |
-| Bevorzugte Alarmverarbeitung | Classic-Priority-Queue mit `x-max-priority=9`, Nachrichtenpriorität 3/9, Prefetch 1 |
-| ACK/NACK und begrenzte Fehlerbehandlung | ACK erst nach Verarbeitung, dauerhafte Fehler mit `requeue=False` in die DLQ |
-| Mindestens zwei Exchange-Typen | Topic, Direct und Fanout |
-| TTL und DLQ | Hauptqueues 60.000 ms, DLX-Routing bei Ablehnung und Ablauf |
-| Monitoring über RabbitMQ | Eigene Telemetrie-Nachrichten und separater Consumer |
-| Reproduzierbarer Consumer-Ausfall | `demo --scenario crash` |
-| Weiteres Fehlerszenario | `invalid`, zusätzlich `processing` |
-| Präsentation | Zehn PDF-Folien, Vortragsnotizen und Demo-Ablauf |
-
-## Materialien und Aufbau
-
-- [Architektur, Verträge und Folienbezug](docs/ARCHITEKTUR.md)
-- [Live-Demo mit erwarteter Beobachtung und Fehlererklärung](docs/DEMO.md)
-- [Präsentation als PDF](docs/Praesentation.pdf)
-- [Vortragsnotizen und Rollenverteilung](docs/VORTRAG.md)
-- [Testbericht](docs/TESTBERICHT.md)
-
-`src/iot_analysis/` enthält die Anwendung, `tests/` die Tests und `scripts/` die Start- und Präsentationsskripte. `python -m iot_analysis --help` und die Hilfe der jeweiligen Unterbefehle beschreiben die verfügbaren Optionen.
-
-Die Lösung verwendet die in der Vorlesung behandelten RabbitMQ-Konzepte. gRPC ist für den asynchronen Nachrichtenfluss dieser Aufgabe nicht erforderlich. Ein einzelner Broker und RAM-basierte Auswertungen halten den Prototyp nachvollziehbar. Grenzen wie mögliche Mehrfachzustellung, fehlende Brokerreplikation und nicht transaktionale Nebeneffekte sind in der Architekturbeschreibung ausdrücklich erläutert.
-
-Die PDF-Präsentation kann mit `python -m pip install reportlab` und `python scripts/build_presentation.py` erneut erzeugt werden. ReportLab ist nur für die Präsentation erforderlich.
-
-`python scripts/package_project.py` erstellt `output/IoT-Realtime-Analysis.zip`
-mit Quellcode, Tests, Dokumentation und Präsentation. Virtuelle Umgebung,
-Zugangsdaten aus `.env` und temporäre Logs werden dabei ausgelassen.
+Technische Details: [ACKs und Confirms](https://www.rabbitmq.com/docs/confirms), [DLX](https://www.rabbitmq.com/docs/dlx), [TTL](https://www.rabbitmq.com/docs/ttl), [Prioritäten](https://www.rabbitmq.com/docs/priority).

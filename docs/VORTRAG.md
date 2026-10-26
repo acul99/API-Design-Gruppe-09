@@ -1,75 +1,66 @@
-# Vortragsnotizen für 15 Minuten
+# Vortragsnotizen: 15 Minuten mit vier Minuten Live-Demo
 
-Die PDF enthält zehn Folien. Die unten genannten Zeiten ergeben insgesamt 15 Minuten einschließlich vier Minuten Live-Demo. Namen vor der Präsentation ergänzen. Alle Gruppenmitglieder übernehmen einen aktiven Teil. Die Verteilung auf drei Rollen lässt sich bei vier bis sechs Personen aufteilen.
+Acht Folien. Gruppennamen im PDF vor dem Vortrag ergänzen. Bei drei Personen übernimmt A Folien 1-2, B Folien 3-4 und C Folien 5-8. Bei vier bis sechs Personen die übrigen Folien und die Bedienung der Demo aufteilen. Alle Gruppenmitglieder übernehmen einen aktiven Teil.
 
-| Rolle | Name ergänzen | Inhalt |
-| --- | --- | --- |
-| A | ____________________ | Einstieg, Architektur, Routing |
-| B | ____________________ | Nachrichtenvertrag, Zuverlässigkeit, Aggregation |
-| C | ____________________ | Monitoring, Live-Demo, Grenzen |
+## 1. IoT-Sensordaten mit RabbitMQ (0:30)
 
-Bei sechs Personen jeweils eine der Foliengruppen 1-2, 3-4, 5, 6, 7 und 8-10 übernehmen. Die Person an der Tastatur und die erklärende Person können wechseln. Änderungen an der Gruppengröße in der tatsächlichen Prüfungsorganisation mit der Lehrperson klären.
+Drei simulierte Sensortypen liefern kontinuierlich Werte. Die Aufgabe verlangt gezieltes Routing, Auswertung, zuverlässige Verarbeitung und Überwachung. Python, Pika und RabbitMQ bilden dafür die gesamte Laufzeittechnik.
 
-## Folie 1: IoT-Echtzeitanalyse mit RabbitMQ (0:30, Rolle A)
+## 2. Architektur mit zwei Exchanges (2:00)
 
-Unser Szenario ist die Überwachung einer simulierten Industrieanlage. Drei Sensortypen liefern fortlaufend Messwerte. Die Aufgabe ist eine robuste Nachrichtenarchitektur mit fachlichen Analysen und priorisierten Alarmen. Die verwendeten Technologien sind Python, Pika und RabbitMQ über AMQP.
+Ein Producer erzeugt Temperatur, Feuchtigkeit und Vibration. `iot.sensors` als Topic-Exchange routet Temperatur/Feuchtigkeit an die Umgebung und Vibration an die Maschine. Das Sternchen ersetzt genau einen Schlüsselbestandteil, hier die Sensor-ID.
 
-## Folie 2: Architektur und Nachrichtenfluss (1:30, Rolle A)
+`iot.events` als Direct-Exchange verwendet feste Schlüssel: WARNING/CRITICAL für die Alarmqueue, monitor für Monitoring und dead für die DLQ. Ein Exchange speichert nicht anstelle einer Queue. Mehrere Consumer derselben Queue teilen die Arbeit.
 
-Den Weg einer Temperaturnachricht erklären: Producer, Sensor-Exchange, Umgebungsqueue, Analyse. Bei einer Anomalie entsteht eine neue Alarmnachricht. Der Alarmconsumer bekommt sie über eine eigene Queue. Parallel publiziert die Analyse Telemetrie für den Monitoringconsumer. Die DLQ sammelt abgelehnte und abgelaufene Nachrichten.
+Alternative erläutern: Fanout würde alle Sensordaten an beide Analysen kopieren. Zwei Exchanges halten dieses kleine Projekt übersichtlich und erfüllen die geforderten unterschiedlichen Exchange-Typen.
 
-Exchanges vermitteln zu Queues. Sie speichern die Sensordaten nicht anstelle der Queues. Mehrere Consumer derselben Queue würden Arbeit teilen. Separate gebundene Queues würden jeweils eine Kopie erhalten.
+Vorlesungsbezug: Kapitel 2, asynchrone und lose gekoppelte Kommunikation. Kapitel 3, PDF-Seiten 69-79, Topic und Direct.
 
-## Folie 3: Routing und Exchange-Wahl (1:15, Rolle A)
+## 3. JSON und fachliche Regeln (1:30)
 
-Topic passt zu `sensors.temperature.temp-01`, weil das Binding `sensors.temperature.*` den Sensortyp unabhängig von der ID auswählt. Die beiden Fachanalysen bekommen bereits im Broker unterschiedliche Messwerte. Ein Fanout für Sensordaten würde dafür unnötige Kopien erzeugen. Direct genügt für exakt benannte Alarmstufen. Fanout verteilt Monitoringereignisse an interessierte Auswertungen.
+Die Pflichtfelder sensor_id, timestamp, type und value stehen direkt im JSON. Der Routing Key muss zum Inhalt passen. Die Temperaturbeispiele 92,5 °C und 110 °C ergeben WARNING beziehungsweise CRITICAL.
 
-Quelle: Kapitel 3, PDF-Seiten 69-79, aufgedruckte Folien 70-80. Die Aussage „Direct ist 1:1“ präzise als exakter Key-Abgleich erklären. Mehrere Queues dürfen denselben Binding Key besitzen.
+Feuchtigkeit und Vibration besitzen ebenfalls je zwei Alarmgrenzen. Die Grenzwerte sind Annahmen für die Simulation. In einer echten Anlage wären sie fachlich zu kalibrieren. JSON ist lesbar und entspricht dem geforderten Format.
 
-## Folie 4: JSON-Vertrag und Alarmgrenzen (1:00, Rolle B)
+## 4. Persistenz, Confirms und Aggregation (2:00)
 
-Die Pflichtattribute stehen direkt im JSON. Die AMQP-Eigenschaften tragen unter anderem Persistenz, Nachrichten-ID und Priorität. Typ und Routing Key müssen zueinander passen. Ungültige Daten gelangen in die DLQ. Grenzwerte sind für die Demonstration gewählt und müssten für eine echte Anlage fachlich festgelegt werden.
+Ersten Codeausschnitt erklären: durable Queues, delivery_mode=2, Publisher Confirms und mandatory. Ein Confirm bestätigt die Brokerannahme. Ein Consumer-ACK bestätigt die Verarbeitung.
 
-Ein Temperaturwert von 92,5 °C erzeugt WARNING. Ein Wert über 100 °C erzeugt CRITICAL. Auch Feuchtigkeit und Vibration besitzen zwei Alarmstufen. Die Zahl der Stufen erfüllt die Aufgabe ohne zusätzliche fachliche Komplexität.
+Der Producer versucht nach einem Fehler höchstens fünfmal erneut zu senden. Die Pausen steigen mit 1, 2, 4, 8 und 10 Sekunden. Ein verlorenes Confirm kann zu Mehrfachzustellung führen.
 
-## Folie 5: Senden und Bestätigen (1:30, Rolle B)
+Fensterablauf erklären: Temperaturwerte zehn Sekunden nach Empfangszeit sammeln, Aggregation und Monitoring publizieren, danach die Lieferungen bestätigen. So bleiben die Quellmessungen bei einem früheren Absturz erneut zustellbar. Der Timer läuft auch ohne weitere Nachrichten.
 
-Codeausschnitt für `delivery_mode=2`, `mandatory=True` und Publisher Confirms erklären. Durable Queues und persistente Nachrichten ergänzen einander. Ein Publisher Confirm bestätigt die Brokerannahme. Der Consumer-ACK bestätigt die Verarbeitung.
+Vorlesungsbezug: Kapitel 3, PDF-Seiten 116 und 125, Backoff und ACKs. Zusätzliche Präzisierung: https://www.rabbitmq.com/docs/confirms.
 
-Der Producer macht nach einem initialen Fehler höchstens fünf Wiederholungen. Die Wartezeiten steigen mit 1, 2, 4, 8 und 10 Sekunden. Ein verlorenes Confirm kann trotz erfolgreicher Brokerannahme einen erneuten Publish auslösen. Diese Unsicherheit macht Mehrfachzustellung möglich.
+## 5. Alarme und Monitoring (1:30)
 
-Quelle: Kapitel 3, PDF-Seiten 116 und 125, aufgedruckte Folien 118 und 127. Publisher-Confirm-Semantik zusätzlich offizielle RabbitMQ-Dokumentation: https://www.rabbitmq.com/docs/confirms.
+WARNING hat Priorität 3, CRITICAL Priorität 9. Die Alarmqueue konfiguriert x-max-priority=9. Prefetch 1 lässt den Broker wartende hohe Prioritäten bevorzugen. Eine laufende Verarbeitung wird nicht unterbrochen.
 
-## Folie 6: Zehn-Sekunden-Fenster und Fehlerpfad (1:30, Rolle B)
+Monitoring erhält eigene Nachrichten über RabbitMQ und zählt Erfolge insgesamt, Erfolge je Typ, Alarme, fehlgeschlagene Verarbeitung und mittlere Verarbeitungszeit. Es liest keine Variablen aus den Analyseprozessen. Die Kennzahlen leben im Arbeitsspeicher und sind keine dauerhafte Statistik.
 
-Die zehn Sekunden beziehen sich auf die im Consumer empfangenen gültigen Temperaturen. Eine monotone Uhr verhindert Effekte durch eine verstellte Systemzeit. Der Fensterabschluss läuft auch ohne neu eintreffende Nachricht. Ergebnis sind Anzahl, Mittelwert, Minimum und Maximum.
+## 6. Fehlerbehandlung und TTL (1:00)
 
-Temperaturlieferungen bleiben bis zum publizierten Aggregationsergebnis unbestätigt. Beim Crash kann der Broker die Messwerte erneut zustellen. Das verbessert die Wiederanlaufsemantik, garantiert aber keine identischen Fenster nach einem Ausfall und keine genau einmal erzeugten Alarme.
+Ungültige Nachrichten bekommen NACK mit requeue=False. Den kurzen Codeausschnitt erklären. RabbitMQ führt die Originalnachricht über den Direct-Exchange und den Schlüssel dead in die DLQ. Es gibt keinen automatischen Rückweg.
 
-Dauerhafte Datenfehler enden mit NACK ohne Requeue. Verarbeitungsfehler haben höchstens drei lokale Versuche. Nach dem Limit führt der DLX in die DLQ. Verbindungsausfälle sind ein eigener Fall, weil ein ACK/NACK möglicherweise nicht mehr sendbar ist. Der zweite Codeausschnitt stammt gekürzt aus `flush_window()` und `_reject()` in `consumers.py`. Die Reihenfolge von Publish und ACK sowie `requeue=False` erklären.
+Hauptqueues haben 60.000 ms TTL. Abgelaufene wartende Nachrichten gelangen mit x-death.reason=expired in die DLQ. Die DLQ selbst hat keine TTL. Diese Queue-TTL ist kein Verarbeitungszeitlimit für eine bereits ausgelieferte Nachricht.
 
-Quelle: Kapitel 3, PDF-Seiten 119, 125 und 130, aufgedruckte Folien 121, 127 und 132.
+## 7. Live-Demo (4:00)
 
-## Folie 7: Priorität, TTL und Monitoring (1:30, Rolle C)
+Vorher Abhängigkeiten installieren und Broker starten. Zwei Terminals bereithalten. Eine Demonstration vor dem Vortrag vollständig proben.
 
-Die Classic-Priority-Queue nutzt `x-max-priority=9`, WARNING 3 und CRITICAL 9. Prefetch 1 reduziert bereits ausgelieferte, noch nicht bearbeitete Alarme. Es gibt keine Unterbrechung eines laufenden Handlers.
+1. `python start.py`: Werte, Alarm und Monitoring zeigen. Auf das Temperaturaggregat nach etwa zehn Sekunden warten. Etwa eine Minute einplanen.
+2. `python demo.py invalid`: Ungültige Nachricht, NACK ohne Requeue und tatsächlichen DLQ-Eintrag erklären. Danach wird eine gültige Nachricht verarbeitet. Etwa eine Minute.
+3. `python demo.py crash`: Analyseprozess stirbt während der Verarbeitung vor ACK. Ersatzprozess empfängt dieselbe Nachricht erneut und bestätigt sie. Etwa eineinhalb Minuten.
+4. Ergebnis einordnen und Normallauf mit Strg+C beenden. Etwa eine halbe Minute.
 
-TTL 60.000 ms entfernt veraltete wartende Daten aus dem normalen Datenfluss. Abgelaufene Nachrichten gelangen als `expired` in die DLQ. Monitoring empfängt Nachrichten über RabbitMQ und berichtet die geforderten fünf Kennzahlen. Der Stand ist flüchtig und keine dauerhafte exakt einmal geführte Statistik.
+Demoergebnisse beschreiben, die tatsächlich beobachtet wurden. Keine Installation oder neuen Testfälle während der vier Minuten einplanen.
 
-Technische Quellen: https://www.rabbitmq.com/docs/priority, https://www.rabbitmq.com/docs/ttl und https://www.rabbitmq.com/docs/dlx.
+## 8. Fehlervergleich und Grenzen (2:30)
 
-## Folie 8: Live-Demo (4:00, Rolle C mit Unterstützung)
+Die sieben Fragen aus der Aufgabe beantworten: Auslöser, Nachrichtenweg, Bestätigung, erneute Zustellung, Fehlerbehandlung, DLQ-Bedingung und anschließender Normalbetrieb.
 
-Den vorbereiteten Ablauf in `DEMO.md` verwenden. Normalbetrieb, Aggregation, ungültige Nachricht und Consumer-Crash sind Pflicht. Bei verbleibender Zeit Alarmpriorität zeigen. Das System nicht während des Vortrags erstmalig installieren. Bei einem unerwarteten lokalen Problem die konkrete Beobachtung ehrlich erklären und die zuvor ausgeführten Tests heranziehen. Keine Live-Ergebnisse behaupten, die nicht beobachtet wurden.
+Bei invalid löst die Validierung den Fehler aus. NACK ohne Requeue führt in die DLQ. Keine erneute Hauptqueue-Zustellung. Eine gültige Folgenachricht zeigt die Erholung. Beim Crash sendet der beendete Prozess weder ACK noch NACK. RabbitMQ reiht die unbestätigte Lieferung erneut ein. Der Ersatzconsumer bestätigt nach Erfolg. Der Crash allein erzeugt keinen Dead Letter.
 
-## Folie 9: Erklärung der Fehlerszenarien (1:15, Rolle C)
+Kapitel 3, PDF-Seite 121 / aufgedruckte Folie 123, fasst den Absturz als DLQ-Auslöser zu stark zusammen. Für unsere Classic-Queues ist zuerst Requeue korrekt. Siehe https://www.rabbitmq.com/docs/confirms und https://www.rabbitmq.com/docs/dlx.
 
-Die unterschiedlichen Pfade nebeneinander erklären: Ungültiges JSON führt zu NACK ohne Requeue und DLQ. Ein Prozessende vor ACK führt zur erneuten Zustellung. Ein dauerhafter Verarbeitungsfehler endet nach drei Versuchen mit NACK und DLQ. Die neue gültige Nachricht zeigt, dass das System anschließend weiterarbeitet.
-
-Kapitel 3, PDF-Seite 121 / aufgedruckte Folie 123, fasst den Crash als DLQ-Auslöser zu stark zusammen. Für unsere Classic-Queue ist die erste Reaktion Requeue der unbestätigten Lieferung. Die offizielle Dokumentation präzisiert dies: https://www.rabbitmq.com/docs/confirms.
-
-## Folie 10: Erkenntnisse und Grenzen (1:00, Rollen A/B/C)
-
-Die zentrale Erkenntnis ist die Trennung zwischen Brokerannahme, Verarbeitung und fachlichen Nebeneffekten. Broker-Routing spart unnötige Verbraucherlogik. Begrenzte Versuche und die DLQ verhindern, dass bekannte fehlerhafte Nachrichten den Datenstrom blockieren.
-
-Ein einzelner Broker bleibt ein Ausfallpunkt. Alarme, Telemetrie und ACK sind nicht atomar. Ein produktives System bräuchte dauerhafte idempotente Verarbeitung und gegebenenfalls Brokerreplikation. Die lokale Lösung bleibt dadurch klein genug, um die in der Vorlesung behandelten Mechanismen im Code und in der Live-Demo konkret zu erklären.
+Grenzen: einzelner Broker, RAM-basierte Auswertung, mögliche Duplikate zwischen Publish und ACK. Ein produktives System bräuchte bei Bedarf dauerhafte idempotente Verarbeitung und Brokerreplikation. Die kleine Lösung zeigt die Vorlesungskonzepte direkt in wenigen Python-Dateien.
