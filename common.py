@@ -63,29 +63,45 @@ def open_channel():
 
 
 def run_consumer(worker, *args):
-    """Verbindungsabbrueche mit Backoff behandeln, dauerhafte Fehler weitergeben."""
+    """Consumer-Sitzungen nach Abbruch mit Backoff neu starten; Strg+C beendet."""
     delay = 1
     while True:
         started = time.monotonic()
         try:
-            return worker(*args)
-        except (pika.exceptions.AMQPConnectionError, OSError) as error:
+            worker(*args)
+            # Pikas consume()-Generator endet bei Basic.Cancel ohne Exception.
+            reason = "Consumer vom Broker abgemeldet"
+        except (pika.exceptions.AMQPConnectionError,
+                pika.exceptions.ChannelClosedByBroker,
+                pika.exceptions.UnroutableError, OSError) as error:
             recoverable = (
                 type(error) is pika.exceptions.AMQPConnectionError
                 or isinstance(error, (OSError, pika.exceptions.StreamLostError,
                                       pika.exceptions.AMQPHeartbeatTimeout,
-                                      pika.exceptions.ConnectionBlockedTimeout))
+                                      pika.exceptions.ConnectionBlockedTimeout,
+                                      # Pika verwendet diese Vermutungen auch bei
+                                      # Transportverlust waehrend des Handshakes.
+                                      pika.exceptions.IncompatibleProtocolError,
+                                      pika.exceptions.ProbableAuthenticationError,
+                                      pika.exceptions.ProbableAccessDeniedError))
+                # Eine interne Zielqueue kann waehrend der Verarbeitung fehlen.
+                # Neu deklarieren und die unbestaetigte Quellnachricht erneut lesen.
+                or isinstance(error, pika.exceptions.UnroutableError)
                 or (isinstance(error, pika.exceptions.ConnectionClosedByBroker)
                     and error.reply_code in (320, 541))
+                or (isinstance(error, pika.exceptions.ChannelClosedByBroker)
+                    and error.reply_code in (404, 320, 541))
             )
             if not recoverable:
                 raise
-            # Nach einer stabilen Sitzung beginnt eine neue Backoff-Folge.
-            if time.monotonic() - started >= 60:
-                delay = 1
-            print(f"Consumer-Verbindung unterbrochen: neuer Versuch in {delay}s ({error})", flush=True)
-            time.sleep(delay)
-            delay = min(delay * 2, 10)
+            reason = repr(error)
+        # Jeder neue Aufruf oeffnet Verbindung/Kanal und deklariert die Topologie.
+        # Nach einer stabilen Sitzung beginnt eine neue Backoff-Folge.
+        if time.monotonic() - started >= 60:
+            delay = 1
+        print(f"Consumer-Sitzung unterbrochen: neuer Versuch in {delay}s ({reason})", flush=True)
+        time.sleep(delay)
+        delay = min(delay * 2, 10)
 
 
 def publish(channel, routing_key, payload, priority=0, exchange=EVENT_EXCHANGE):
