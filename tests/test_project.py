@@ -11,6 +11,9 @@ import sys
 import time
 import unittest
 from unittest.mock import Mock, call, patch
+from uuid import uuid4
+
+import pika
 
 import common
 from analysis import alarm_level, summarize
@@ -134,9 +137,133 @@ class ProjectTests(unittest.TestCase):
 class BrokerTests(unittest.TestCase):
     def test_invalid_message_and_crash(self):
         root = Path(__file__).resolve().parents[1]
-        for scenario in ("invalid", "crash"):
-            with self.subTest(scenario=scenario):
-                subprocess.run([sys.executable, "demo.py", scenario], cwd=root, check=True, timeout=30)
+        base = "demo_test_" + uuid4().hex
+        normal_queue = f"{base}.normal.dlq"
+        environment = {**os.environ, "IOT_NAMESPACE": f"{base}.normal", "IOT_DEMO_NAMESPACE": base}
+        parameters = pika.URLParameters(os.getenv("AMQP_URL", "amqp://guest:guest@localhost:5672/%2F"))
+        parameters.socket_timeout = 3
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        channel.confirm_delivery()
+        queues = [normal_queue]
+        exchanges = []
+
+        def declare_demo(prefix):
+            for exchange, kind in ((f"{prefix}.sensors", "topic"), (f"{prefix}.events", "direct")):
+                channel.exchange_declare(exchange=exchange, exchange_type=kind, durable=True)
+                if exchange not in exchanges:
+                    exchanges.append(exchange)
+            for suffix in ("environment", "machinery", "alarms", "monitor", "dlq"):
+                queue = f"{prefix}.{suffix}"
+                arguments = {"x-queue-type": "classic"}
+                if suffix != "dlq":
+                    arguments.update({"x-dead-letter-exchange": f"{prefix}.events",
+                                      "x-dead-letter-routing-key": "dead"})
+                if suffix == "alarms":
+                    arguments["x-max-priority"] = 9
+                # A declaration with matching arguments also proves that the
+                # retained demo queues have no TTL that could expire the evidence.
+                channel.queue_declare(queue=queue, durable=True, arguments=arguments)
+                if queue not in queues:
+                    queues.append(queue)
+
+        def drain_owned_test_queue(queue):
+            records = []
+            while True:
+                method, properties, body = channel.basic_get(queue=queue, auto_ack=True)
+                if method is None:
+                    return records
+                records.append((properties, body))
+
+        def assert_source_idle(queue):
+            deadline = time.monotonic() + 5
+            while True:
+                state = channel.queue_declare(queue=queue, passive=True).method
+                if state.consumer_count == 0 and state.message_count == 0:
+                    return
+                if time.monotonic() >= deadline:
+                    self.fail(f"Demoquelle nicht leer/ohne Consumer: {queue}")
+                connection.sleep(0.05)
+
+        try:
+            channel.queue_declare(queue=normal_queue, durable=True, arguments={"x-queue-type": "classic"})
+            channel.basic_publish(exchange="", routing_key=normal_queue, body=b"normal-data-untouched", mandatory=True)
+            for scenario in ("invalid", "crash"):
+                with self.subTest(scenario=scenario):
+                    prefix = f"{base}.{scenario}"
+                    declare_demo(prefix)
+                    # Earlier evidence must survive, and must never count as
+                    # proof that this run has processed its new measurement.
+                    old_id = f"old-{scenario}"
+                    channel.basic_publish(exchange="", routing_key=f"{prefix}.dlq", body=b"older-evidence",
+                        properties=pika.BasicProperties(message_id=old_id, delivery_mode=2), mandatory=True)
+                    old_metric = {"status": "processed", "message_id": old_id, "sensor_type": "humidity",
+                                  "elapsed_ms": 0, "alarm": False, "redelivered": False}
+                    channel.basic_publish(exchange="", routing_key=f"{prefix}.monitor",
+                        body=json.dumps(old_metric).encode(),
+                        properties=pika.BasicProperties(message_id=old_id, delivery_mode=2), mandatory=True)
+
+                    for run in (1, 2):
+                        result = subprocess.run([sys.executable, "-u", "-X", "utf8", "demo.py", scenario, "--auto"],
+                            cwd=root, env=environment, check=True, timeout=150, capture_output=True,
+                            text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
+                        self.assertIn("OK:", result.stdout)
+                        declare_demo(prefix)
+                        assert_source_idle(f"{prefix}.environment")
+                        self.assertEqual(channel.queue_declare(queue=f"{prefix}.dlq", passive=True).method.message_count,
+                                         1 + (run if scenario == "invalid" else 0))
+                        self.assertEqual(channel.queue_declare(queue=f"{prefix}.monitor", passive=True).method.message_count,
+                                         1 + 2 * run)
+                        self.assertEqual(channel.queue_declare(queue=normal_queue, passive=True).method.message_count, 1)
+
+                    dead_letters = drain_owned_test_queue(f"{prefix}.dlq")
+                    self.assertIn((old_id, b"older-evidence"),
+                                  [(properties.message_id, body) for properties, body in dead_letters])
+                    new_dead_letters = [(properties, body) for properties, body in dead_letters
+                                        if properties.message_id != old_id]
+                    metrics = [json.loads(body) for _, body in drain_owned_test_queue(f"{prefix}.monitor")]
+                    self.assertIn(old_metric, metrics)
+                    new_metrics = [metric for metric in metrics if metric["message_id"] != old_id]
+                    self.assertEqual(len({metric["message_id"] for metric in new_metrics}), 4)
+                    followups = [metric for metric in new_metrics if metric["message_id"].startswith("after-demo-")]
+                    self.assertEqual(len(followups), 2)
+                    self.assertTrue(all(metric["status"] == "processed" for metric in followups))
+                    if scenario == "invalid":
+                        self.assertEqual(len(new_dead_letters), 2)
+                        rejected_ids = set()
+                        for properties, body in new_dead_letters:
+                            self.assertTrue(properties.message_id.startswith("invalid-demo-"))
+                            self.assertEqual(properties.headers["x-death"][0]["reason"], "rejected")
+                            self.assertEqual(body, b"{kaputtes JSON")
+                            rejected_ids.add(properties.message_id)
+                        self.assertEqual(len(rejected_ids), 2)
+                        self.assertEqual({metric["message_id"] for metric in new_metrics if metric["status"] == "failed"},
+                                         rejected_ids)
+                    else:
+                        self.assertEqual(new_dead_letters, [])
+                        redelivered = [metric for metric in new_metrics if metric["message_id"].startswith("crash-demo-")]
+                        self.assertEqual(len(redelivered), 2)
+                        self.assertTrue(all(metric["redelivered"] is True and metric["status"] == "processed"
+                                            for metric in redelivered))
+            self.assertEqual(drain_owned_test_queue(normal_queue)[0][1], b"normal-data-untouched")
+        finally:
+            # These names include this test's UUID. User-visible demo queues and
+            # the application's ordinary namespace are never removed by tests.
+            for queue in queues:
+                cleanup = connection.channel()
+                try:
+                    cleanup.queue_delete(queue=queue)
+                finally:
+                    if cleanup.is_open:
+                        cleanup.close()
+            for exchange in exchanges:
+                cleanup = connection.channel()
+                try:
+                    cleanup.exchange_delete(exchange=exchange)
+                finally:
+                    if cleanup.is_open:
+                        cleanup.close()
+            connection.close()
 
 
 if __name__ == "__main__":

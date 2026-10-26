@@ -23,14 +23,20 @@ PUBLISH_ERRORS = (pika.exceptions.AMQPError, OSError)
 
 
 def declare_topology(channel):
+    # Die schrittweise Demo braucht unbegrenzt Zeit zum Betrachten der Nachrichten.
+    ttl_setting = os.getenv("IOT_MESSAGE_TTL_MS", "60000")
+    message_ttl = None if ttl_setting == "none" else int(ttl_setting)
+    if message_ttl is not None and message_ttl < 0:
+        raise ValueError("IOT_MESSAGE_TTL_MS muss nicht negativ oder 'none' sein")
     channel.exchange_declare(exchange=SENSOR_EXCHANGE, exchange_type="topic", durable=True)
     channel.exchange_declare(exchange=EVENT_EXCHANGE, exchange_type="direct", durable=True)
     for queue in QUEUES:
         arguments = {"x-queue-type": "classic"}
         if queue != DLQ:
-            arguments.update({"x-message-ttl": 60000,
-                              "x-dead-letter-exchange": EVENT_EXCHANGE,
+            arguments.update({"x-dead-letter-exchange": EVENT_EXCHANGE,
                               "x-dead-letter-routing-key": "dead"})
+            if message_ttl is not None:
+                arguments["x-message-ttl"] = message_ttl
         if queue == ALARM_QUEUE:
             arguments["x-max-priority"] = 9
         channel.queue_declare(queue=queue, durable=True, arguments=arguments)

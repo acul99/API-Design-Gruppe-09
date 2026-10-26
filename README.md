@@ -2,6 +2,8 @@
 
 Ein kleines Vorlesungsprojekt mit Python und Pika: Drei simulierte Sensortypen liefern Messwerte. Zwei Analyse-Consumer erkennen Anomalien, ein Alarm-Consumer verarbeitet priorisierte Alarme und ein Monitoring-Consumer zeigt Kennzahlen. Die Anwendung besteht aus sieben Python-Dateien.
 
+Zur Vorbereitung auf die Präsentation: [Projekt und Technologien verstehen](docs/PROJEKT_VERSTEHEN.md). Der Leitfaden erklärt den Nachrichtenfluss, die RabbitMQ-Begriffe, Fehlerfälle und typische Rückfragen.
+
 ## Start
 
 Voraussetzungen: Python ab 3.11 und ein laufender RabbitMQ auf `localhost:5672`.
@@ -43,7 +45,7 @@ Standard ist `amqp://guest:guest@localhost:5672/%2F`. Das Konto `guest` ist für
 | `analysis.py` | Umgebung oder Maschine analysieren, Alarmregeln und Temperaturfenster |
 | `alarm.py` | WARNING und CRITICAL nach Brokerpriorität verarbeiten |
 | `monitor.py` | Über RabbitMQ empfangene Kennzahlen ausgeben |
-| `demo.py` | Zwei echte, isolierte Fehlerszenarien durchführen |
+| `demo.py` | Zwei Fehlerszenarien schrittweise mit sichtbaren RabbitMQ-Queues vorführen |
 | `start.py` | Alle Dienste starten und gemeinsam beenden |
 
 Zum Erklären lassen sich die Dienste auch einzeln in fünf Terminals starten:
@@ -87,7 +89,7 @@ Die Simulation verwendet °C, relative Luftfeuchtigkeit in Prozent und Vibration
 - **Manuelle ACKs:** Erst nach erfolgreicher Verarbeitung und bestätigter Alarm-/Monitoringpublikation bestätigen. Temperaturwerte bleiben bis zum abgeschlossenen Zehn-Sekunden-Fenster unbestätigt.
 - **Aggregation:** Alle innerhalb eines zusammenhängenden Zehn-Sekunden-Fensters empfangenen gültigen Temperaturen ergeben Anzahl, Mittelwert, Minimum und Maximum. Ein Timer schließt das Fenster auch ohne neue Nachricht ab.
 - **Priorität:** Alarmqueue mit `x-max-priority=9`, WARNING mit Priorität 3, CRITICAL mit 9. Prefetch 1 begrenzt vorab ausgelieferte Alarme. Bereits laufende Verarbeitung wird nicht unterbrochen.
-- **TTL und DLQ:** Hauptqueues haben `x-message-ttl=60000` und leiten abgelaufene oder mit `requeue=False` abgelehnte Nachrichten über `iot.events` / `dead` an die DLQ. Die DLQ hat keine TTL und keine automatische Rückführung.
+- **TTL und DLQ:** Hauptqueues des Normalbetriebs haben standardmäßig `x-message-ttl=60000` und leiten abgelaufene oder mit `requeue=False` abgelehnte Nachrichten über `iot.events` / `dead` an die DLQ. Die DLQ hat keine TTL und keine automatische Rückführung.
 - **Monitoring:** Ein eigener Consumer zählt verarbeitete Messungen, Werte je Typ, Alarme, Fehler und mittlere Verarbeitungszeit anhand eigener RabbitMQ-Nachrichten.
 
 Diese Begriffe stammen hauptsächlich aus Kapitel 3 der Vorlesung. Kapitel 2 erklärt die lose gekoppelte, asynchrone Kommunikation. JSON und Python/Pika/RabbitMQ entsprechen der Aufgabenstellung. gRPC ist für diesen Nachrichtenfluss nicht erforderlich.
@@ -99,7 +101,33 @@ python demo.py invalid
 python demo.py crash
 ```
 
-Die Demos verwenden eigene Queuenamen und entfernen anschließend nur ihre eigenen RabbitMQ-Ressourcen.
+Die Demos verwenden feste Queues unter `iot.demo.invalid.*` beziehungsweise `iot.demo.crash.*`. Sie bleiben nach dem Lauf in RabbitMQ erhalten, einschließlich der DLQ-Nachricht und der Monitoringereignisse. Bereits erfolgreich bestätigte Quellnachrichten sind dagegen aus ihrer Queue entfernt. Die normalen Anwendungsqueues unter `iot.*`, etwa `iot.environment`, werden von den Demos nicht verwendet.
+
+Im interaktiven Terminal wartet die Demo an den entscheidenden Stellen auf **Enter**. Öffne parallel die [RabbitMQ-Verwaltung](http://localhost:15672), wähle **Queues and Streams** und filtere nach `iot.demo.`. Die wichtigsten Ansichten sind:
+
+| Demo | Queue | Beobachtung |
+| --- | --- | --- |
+| `invalid` | `iot.demo.invalid.environment` | Die ungültige Nachricht wartet zunächst unter **Ready** auf ihren Consumer. |
+| `invalid` | `iot.demo.invalid.dlq` | Nach der Ablehnung liegt die Nachricht hier mit `x-death.reason=rejected`. |
+| `crash` | `iot.demo.crash.environment` | Die Nachricht wechselt von **Ready** zu **Unacked**. Nach dem Prozessabbruch wird sie wieder **Ready**, bevor der Ersatzconsumer sie verarbeitet. |
+| beide | `iot.demo.invalid.monitor` bzw. `iot.demo.crash.monitor` | Die Verarbeitungsereignisse bleiben als Nachweis erhalten. |
+
+Nach dem Prozessabbruch kann RabbitMQ zunächst weiter **Unacked** anzeigen, bis der Broker die verlorene Verbindung erkennt. Bei verzögerter Erkennung bis etwa 90 Sekunden einplanen. Die Demo wartet währenddessen selbst auf **Ready**; erst bei der nächsten Enter-Aufforderung fortfahren.
+
+Warte nach einem Zustandswechsel auf die nächste Aktualisierung der Verwaltungsoberfläche, bevor du Enter drückst. Während des Laufs die Quellqueue nur anhand der Zähler beobachten. Nach dem Lauf kannst du in DLQ und Monitoringqueue unter **Get messages** die Option zum erneuten Einreihen (**requeue**) wählen. So bleibt die Nachricht auch nach dem Lesen erhalten. Beim Crash ist das Feld `redelivered: true` **im JSON-Body des Monitoringereignisses** der Nachweis für die erneute Zustellung der ursprünglichen Messung. Das äußere AMQP-Redelivery-Kennzeichen des gelesenen Ereignisses kann sich schon durch dessen wiederholte Anzeige ändern.
+
+Jeder Lauf gibt neue IDs mit einem eindeutigen Suffix aus, zum Beispiel `crash-demo-…`. Dadurch sind die aktuellen Nachweise von älteren Läufen unterscheidbar. Die Demo löscht oder leert ihre Queues nicht automatisch. Falls eine abgebrochene Vorführung noch Quellnachrichten oder einen aktiven Consumer in ihrer `.environment`-Queue hinterlassen hat, verweigert sie den nächsten Start. Beende den alten Demo-Prozess und entferne vor einem neuen Lauf nur die verbliebenen Nachrichten aus genau dieser Demo-Queue; DLQ und Monitoringnachweise können erhalten bleiben.
+
+**Für die Vorführung haben die Demo-Queues keine Nachrichten-TTL.** So läuft eine Nachricht während einer Erklärungspause nicht ab. Der Normalbetrieb verwendet weiterhin standardmäßig 60 Sekunden. `AMQP_URL` wählt auch für die Demos den Broker. `IOT_DEMO_NAMESPACE` kann den Basispräfix `iot.demo` ersetzen; der Szenarioname wird angehängt.
+
+Für einen automatischen Durchlauf ohne Enter-Pausen:
+
+```powershell
+python demo.py invalid --auto
+python demo.py crash --auto
+```
+
+Ohne interaktives Terminal laufen die Demos ebenfalls automatisch. Mit `--step` lassen sich Enter-Pausen auch bei umgeleiteter Eingabe ausdrücklich einschalten. In beiden Modi bleiben die Queues und Nachweise erhalten. Am Ende oder bei `Strg+C` werden nur die von der Demo gestarteten Consumer beendet.
 
 | Szenario | Auslöser | ACK/NACK und Nachrichtenweg | Danach |
 | --- | --- | --- | --- |
@@ -114,9 +142,9 @@ Tests für die kleine Logik ausführen:
 python -m unittest discover -s tests -v
 ```
 
-Mit `$env:RUN_RABBITMQ_TESTS = '1'` werden die beiden Fehlerdemos und die Wiederanmeldung aller vier Consumer nach dem Löschen ihrer eigenen Testqueue zusätzlich geprüft; dafür muss RabbitMQ unter `AMQP_URL` laufen. Die Tests verwenden jeweils einen eigenen Namensraum und entfernen nur ihre eigenen Ressourcen.
+Mit `$env:RUN_RABBITMQ_TESTS = '1'` werden die beiden Fehlerdemos und die Wiederanmeldung aller vier Consumer nach dem Löschen ihrer eigenen Testqueue zusätzlich geprüft; dafür muss RabbitMQ unter `AMQP_URL` laufen. Die automatisierten Demotests setzen einen eigenen zufälligen Basispräfix, nutzen `--auto` und räumen ihre Testressourcen selbst auf. Die festen Vorführungsqueues bleiben davon unberührt.
 
-Am 26.10.2026 geprüft: alle 26 Tests einschließlich der beiden Fehlerdemos und der vier Wiederanlaufprüfungen bestanden gegen einen separaten RabbitMQ 4.3.6 in Docker. Die Tests ohne Broker prüfen außerdem Pikas echte Fehlerklassifikation bei abgebrochenen Handshakes und das Ende des Consumer-Generators bei `Basic.Cancel`. Zusätzlich lief das Gesamtsystem nach einem echten Broker-Stopp/Start weiter, einschließlich Aggregation und Monitoring. Das Löschen der Alarm- und Monitoringqueue bei laufenden Analysen löste ebenfalls einen erfolgreichen Wiederanlauf aus, einschließlich erneuter Publikation und ACK der Quellnachrichten.
+Am 26.10.2026 geprüft: alle 38 Tests einschließlich der beiden Fehlerdemos und der vier Wiederanlaufprüfungen bestanden gegen einen separaten RabbitMQ 4.3.6 in Docker. Die Demotests prüfen auch wiederholte Läufe mit älteren Belegen, erhaltene Nachrichten und unveränderte Daten im normalen Namensraum. Die Tests ohne Broker prüfen außerdem Pikas echte Fehlerklassifikation bei abgebrochenen Handshakes und das Ende des Consumer-Generators bei `Basic.Cancel`. Zusätzlich lief das Gesamtsystem nach einem echten Broker-Stopp/Start weiter, einschließlich Aggregation und Monitoring. Das Löschen der Alarm- und Monitoringqueue bei laufenden Analysen löste ebenfalls einen erfolgreichen Wiederanlauf aus, einschließlich erneuter Publikation und ACK der Quellnachrichten.
 
 ## Präsentation und Grenzen
 

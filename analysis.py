@@ -2,6 +2,7 @@
 
 import argparse
 import math
+from pathlib import Path
 import time
 
 from common import (ENV_QUEUE, MACHINE_QUEUE, close,
@@ -22,7 +23,7 @@ def summarize(values):
             "min": min(values), "max": max(values)}
 
 
-def main(kind, delay=0):
+def main(kind, delay=0, wait_file=None):
     connection, channel = open_channel()
     queue = ENV_QUEUE if kind == "environment" else MACHINE_QUEUE
     window_end = time.monotonic() + 10
@@ -50,6 +51,10 @@ def main(kind, delay=0):
                 continue
             message_id = properties.message_id or "ohne-id"
             print(f"EMPFANG {message_id} redelivered={method.redelivered}", flush=True)
+            # Die Demo haelt eine echte unbestaetigte Lieferung sichtbar.
+            # Pika bedient waehrenddessen weiterhin die Verbindung und Heartbeats.
+            while wait_file is not None and Path(wait_file).exists():
+                connection.sleep(0.1)
             started = time.perf_counter()
             if delay:
                 connection.sleep(delay)  # Nur fuer den reproduzierbaren Crash-Test.
@@ -82,10 +87,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("kind", choices=("environment", "machinery"))
     parser.add_argument("--delay", type=float, default=0, help="Verzoegerung fuer die Crash-Demo")
+    parser.add_argument("--wait-file", type=Path, help="Demo: vor Verarbeitung warten, solange diese Datei existiert")
     args = parser.parse_args()
     if args.delay < 0:
         parser.error("delay darf nicht negativ sein")
     try:
-        run_consumer(main, args.kind, args.delay)
+        run_consumer(main, args.kind, args.delay, args.wait_file)
     except KeyboardInterrupt:
         pass

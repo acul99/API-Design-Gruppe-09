@@ -42,18 +42,24 @@ Monitoring erhält eigene Nachrichten über RabbitMQ und zählt Erfolge insgesam
 
 Ungültige Nachrichten bekommen NACK mit requeue=False. Den kurzen Codeausschnitt erklären. RabbitMQ führt die Originalnachricht über den Direct-Exchange und den Schlüssel dead in die DLQ. Es gibt keinen automatischen Rückweg.
 
-Hauptqueues haben 60.000 ms TTL. Abgelaufene wartende Nachrichten gelangen mit x-death.reason=expired in die DLQ. Die DLQ selbst hat keine TTL. Diese Queue-TTL ist kein Verarbeitungszeitlimit für eine bereits ausgelieferte Nachricht.
+Die Hauptqueues des Normalbetriebs haben standardmäßig 60.000 ms Nachrichten-TTL. Abgelaufene wartende Nachrichten gelangen mit x-death.reason=expired in die DLQ. Die DLQ selbst hat keine TTL. Diese TTL ist kein Verarbeitungszeitlimit für eine bereits ausgelieferte Nachricht. Die separaten Vorführungsqueues der folgenden Demos haben keine Nachrichten-TTL, damit Nachrichten während einer Erklärungspause erhalten bleiben.
 
 ## 7. Live-Demo (4:00)
 
-Vorher Abhängigkeiten installieren und Broker starten. Zwei Terminals bereithalten. Eine Demonstration vor dem Vortrag vollständig proben.
+Vorher Abhängigkeiten installieren und Broker starten. Zwei Terminals und die [RabbitMQ-Verwaltung](http://localhost:15672) bereithalten. Unter **Queues and Streams** nach `iot.demo.` filtern. Eine Demonstration vor dem Vortrag vollständig proben. Im interaktiven Terminal wartet die Demo an den entscheidenden Stellen auf **Enter**; erst nach der Aktualisierung der Queue-Zähler fortfahren.
 
 1. `python start.py`: Werte, Alarm und Monitoring zeigen. Auf das Temperaturaggregat nach etwa zehn Sekunden warten. Etwa eine Minute einplanen.
-2. `python demo.py invalid`: Ungültige Nachricht, NACK ohne Requeue und tatsächlichen DLQ-Eintrag erklären. Danach wird eine gültige Nachricht verarbeitet. Etwa eine Minute.
-3. `python demo.py crash`: Analyseprozess stirbt während der Verarbeitung vor ACK. Ersatzprozess empfängt dieselbe Nachricht erneut und bestätigt sie. Etwa eineinhalb Minuten.
+2. `python demo.py invalid`: In `iot.demo.invalid.environment` zuerst **Ready** zeigen. Dann den Consumer starten lassen und den Wechsel nach `iot.demo.invalid.dlq` erklären: NACK ohne Requeue, `x-death.reason=rejected`. Die anschließende gültige Messung erzeugt ein Erfolgsereignis in `iot.demo.invalid.monitor`. Etwa eine Minute.
+3. `python demo.py crash`: In `iot.demo.crash.environment` die Zustände **Ready**, **Unacked** und nach dem Prozessabbruch erneut **Ready** zeigen. Der Ersatzconsumer startet nach der nächsten Enter-Pause und bestätigt die Verarbeitung. In `iot.demo.crash.monitor` die aktuelle `crash-demo-…`-ID und `redelivered: true` im JSON-Body zeigen. Etwa eineinhalb Minuten.
 4. Ergebnis einordnen und Normallauf mit Strg+C beenden. Etwa eine halbe Minute.
 
-Demoergebnisse beschreiben, die tatsächlich beobachtet wurden. Keine Installation oder neuen Testfälle während der vier Minuten einplanen.
+Nach dem Prozessabbruch kann **Unacked** sichtbar bleiben, bis der Broker die verlorene Verbindung erkannt hat. Bei verzögerter Erkennung bis etwa 90 Sekunden einplanen. Die Demo wartet dann selbst auf **Ready**; erst bei der nächsten Enter-Aufforderung fortfahren. Den Vier-Minuten-Ablauf mit dem tatsächlichen Broker proben und für diese Wartezeit gegebenenfalls zusätzliche Reserve vorsehen.
+
+Die Demo-Queues und ihre DLQ-/Monitoringnachweise bleiben nach dem Lauf erhalten. Bereits bestätigte Quellmessungen sind aus der `.environment`-Queue entfernt. Zum Anzeigen der Nachweise unter **Get messages** immer **requeue** wählen. Während des Laufs keine Quellnachrichten über die Oberfläche abrufen oder entfernen. Das äußere Redelivery-Kennzeichen angezeigter Ereignisse kann sich durch dieses Lesen ändern; der Crash-Nachweis steht im JSON-Body des Monitoringereignisses.
+
+Jeder Lauf druckt neue IDs mit einem eindeutigen Suffix aus. Bei einer zuvor abgebrochenen Vorführung erst ihren Consumer beenden und gegebenenfalls ausschließlich verbliebene Nachrichten ihrer `.environment`-Queue entfernen, bevor die Demo erneut startet. DLQ und Monitoring können die alten Nachweise behalten. `--auto` überspringt alle Enter-Pausen; ohne interaktives Terminal ist dieser Modus ebenfalls aktiv. `--step` schaltet Enter-Pausen auch bei umgeleiteter Eingabe ein. Automatisierte Tests verwenden getrennte Namensräume und räumen nur ihre eigenen Ressourcen auf.
+
+Demoergebnisse beschreiben, die tatsächlich beobachtet wurden. Keine Installation oder neuen Testfälle während der vier Minuten einplanen. Die Enter-Pausen beim Probelauf so einteilen, dass genug Zeit für die Zustandsanzeige bleibt.
 
 ## 8. Fehlervergleich und Grenzen (2:30)
 
