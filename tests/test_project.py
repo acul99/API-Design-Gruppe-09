@@ -1,17 +1,46 @@
 """Kleine Tests fuer die fachlichen Regeln und die wichtigsten AMQP-Einstellungen."""
 
 from datetime import datetime, timezone
+from contextlib import redirect_stdout
+from io import StringIO
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import Mock, call, patch
 
 import common
 from analysis import alarm_level, summarize
 from producer import send_with_retry
+import start
+
+
+class StarterTests(unittest.TestCase):
+    def test_child_output_and_errors_reach_parent_console(self):
+        output = StringIO()
+        real_popen, real_sleep = subprocess.Popen, time.sleep
+        code = "import sys,time; print('CHILD-OUT',flush=True); print('CHILD-ERR',file=sys.stderr,flush=True); time.sleep(30)"
+
+        def launch_child(command, **kwargs):
+            return real_popen([sys.executable, "-u", "-X", "utf8", "-c", code], **kwargs)
+
+        def stop_after_output(_):
+            deadline = time.monotonic() + 3
+            while output.getvalue().count("CHILD-OUT") < 5 or output.getvalue().count("CHILD-ERR") < 5:
+                if time.monotonic() >= deadline:
+                    self.fail("Ausgaben der fuenf Kindprozesse erreichen die Elternkonsole nicht")
+                real_sleep(0.01)
+            raise KeyboardInterrupt
+
+        with patch("start.open_channel", return_value=(Mock(), Mock())), \
+             patch("start.subprocess.Popen", side_effect=launch_child), \
+             patch("start.time.sleep", side_effect=stop_after_output), redirect_stdout(output):
+            start.main()
+        self.assertEqual(output.getvalue().count("CHILD-OUT"), 5)
+        self.assertEqual(output.getvalue().count("CHILD-ERR"), 5)
 
 
 class ProjectTests(unittest.TestCase):
