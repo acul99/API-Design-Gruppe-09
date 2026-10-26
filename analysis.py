@@ -36,7 +36,7 @@ def main(kind, delay=0):
                 if pending:
                     result = summarize([sensor["value"] for _, sensor, _, _, _ in pending])
                     publish(channel, "monitor", {"status": "aggregation", "window_seconds": 10, **result})
-                    print(f"FENSTER 10s: {result}", flush=True)
+                    print(f"Tumbling Window: {result}", flush=True)
                     for tag, sensor, alarm, elapsed, redelivered in pending:
                         emit_metric(channel, "processed", sensor["message_id"], sensor["type"],
                                     alarm, elapsed, redelivered)
